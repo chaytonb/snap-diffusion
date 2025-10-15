@@ -39,12 +39,14 @@ module rwalkML
   integer, parameter :: max_rands=6000000
   integer :: nrand=1
   real :: rands(max_rands) ! initialise array to store random numbers
+  integer :: part_stability=0 ! For recording turbulence statistics
 
   real(real64), save, public :: a_in_bl = 0.5
   real(real64), save, public :: a_above_bl = 0.25
   real(real64), save, public :: b = 0.875
   character(len=64), save, public :: diffusion_scheme = ''
   character(len=64), save, public :: bl_definition = ''
+  character(len=64), save, public :: record_stats = ''
 
   public rwalk, rwalk_init, flexpart_diffusion, diffusion_fields, air_density
 
@@ -121,6 +123,14 @@ subroutine rwalk(blfullmix,part,pextra)
 ! vertical diffusion
   if (part%z <= part%tbl) then ! Above boundary layer
       part%z = part%z + vrdbla*rnd(3)
+
+      if (record_stats=='y') then
+        open(unit=11, file="/lustre/storeB/users/chbou7748/ETEX_diffusion/model_runs/diffusion_schemes/runs/turbulence_stats/& 
+        turb_time_series_SNAP_abovebl.dat", status="unknown", position="append")
+        write(11,'(3F12.6)') rl*rnd(1)*pextra%rmx, rl*rnd(2)*pextra%rmy, vrdbla*rnd(3)
+        close(11)
+      endif
+
   else ! In boundary layer
     bl_entrainment_thickness = (1.0 - part%tbl)*(1.+entrainment)
     if (blfullmix .or. (tsqrtfactor_v .gt. 1.0)) then ! full mixing
@@ -130,8 +140,15 @@ subroutine rwalk(blfullmix,part,pextra)
 
       part%z = part%z + rv*rnd(3)
 
-    !... reflection from the ABL top
-    !... but allow for entrainment
+      if (record_stats=='y') then
+        open(unit=11, file="/lustre/storeB/users/chbou7748/ETEX_diffusion/model_runs/diffusion_schemes/runs/turbulence_stats/& 
+        turb_time_series_SNAP_withinbl.dat", status="unknown", position="append")
+        write(11,'(3F12.6)') rl*rnd(1)*pextra%rmx, rl*rnd(2)*pextra%rmy, rv*rnd(3)
+        close(11)
+      endif
+
+      !... reflection from the ABL top
+      !... but allow for entrainment
       ! top_entrainment 10% higher than tbl
       top_entrainment = max(0., 1.0 - bl_entrainment_thickness)
       if(part%z < top_entrainment) then
@@ -206,7 +223,6 @@ subroutine flexpart_diffusion(part,pextra)
   pextra%tblmetres = below_layer + weight * (above_layer - below_layer)
 
   height_init = part%z
-
   ! Check if particle within abl
   if (part%z.ge.part%tbl) then
     call flexpart_diffusion_within_abl(part,pextra,nrand,max_rands,rands)
@@ -238,22 +254,23 @@ subroutine flexpart_diffusion(part,pextra)
 
     part%z = min(part%z, 1.0d0) ! set minimum height
 
-    ! open(unit=11, file="/lustre/storeB/users/chbou7748/ETEX_diffusion/model_runs/diffusion_schemes/output_files/ & 
-    ! turb_time_series_flex_withinbl.dat", status="unknown", position="append")
-
-    ! write(11,'(3F12.6)') pextra%turbvelu* tstep*pextra%rmx, pextra%turbvelv* tstep*pextra%rmy, part%z - height_init
-
-    ! close(11)
+    if (record_stats=='y') then
+      open(unit=11, file="/lustre/storeB/users/chbou7748/ETEX_diffusion/model_runs/diffusion_schemes/runs/turbulence_stats/& 
+      turb_time_series_flex_withinbl.dat", status="unknown", position="append")
+      write(11,'(4F12.6, I6)') pextra%turbvelu, pextra%turbvelv, pextra%turbvelw, part%z - height_init, part_stability
+      close(11)
+    endif
 
   else
     call flexpart_diffusion_above_abl(part, pextra, nrand, max_rands, rands)
 
-    ! open(unit=11, file="/lustre/storeB/users/chbou7748/ETEX_diffusion/model_runs/diffusion_schemes/output_files/ & 
-    ! turb_time_series_flex_abovebl.dat", status="unknown", position="append")
+    if (record_stats=='y') then
+      open(unit=11, file="/lustre/storeB/users/chbou7748/ETEX_diffusion/model_runs/diffusion_schemes/runs/turbulence_stats/& 
+      turb_time_series_flex_abovebl.dat", status="unknown", position="append")
+      write(11,'(4F12.6, I6)') pextra%turbvelu, pextra%turbvelv, pextra%turbvelw, part%z - height_init, part_stability
+      close(11)
+    endif
 
-    ! write(11,'(3F12.6)') pextra%turbvelu* tstep*pextra%rmx, pextra%turbvelv* tstep*pextra%rmy, part%z - height_init
-
-    ! close(11)
   endif
 
 
@@ -305,6 +322,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands)
   
   ! Case 1, Neutral Conditions
   if (pextra%tblmetres/ABS(ol).lt.1.) then
+    part_stability=0
     ustar = max(1.e-4, ustar)
 
     ! Eq. 7.25 Hanna 1982: sigu/ust=2.0*exp(-3*f*z/ust),
@@ -330,6 +348,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands)
   
   ! Case 2 , Unstable Conditions
   elseif (ol.lt.0.) then
+    part_stability=-1
     ! Eq. 4.15 Caughey 1982
     sigu=ustar*(12.-0.5*pextra%tblmetres/ol)**0.33333
     sigu=MAX(sigu,1.e-6)
@@ -375,6 +394,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands)
   ! Case 3, Stable Conditions 
   
   else
+    part_stability=1
     ! Standard deviations of turbulent velocity fluctuations
     sigu=2.*ustar*(1.-scaled_height) !. 7.20, Hanna
     sigv=1.3*ustar*(1.-scaled_height) !. 7.19, Hanna
@@ -422,7 +442,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands)
   dttlw = tstep/tlw
 
   if (nrand+1.gt.max_rands) nrand=1
-  ! Calculate turbulent vertical velocity
+  ! Calculate turbulent vertical vel5.0ocity
   rw=exp(-dttlw)
   pextra%turbvelw=(rw*pextra%turbvelw+rands(nrand)*sqrt(1.-rw**2)*sigw &
         +tlw*(1.-rw)*(dsigw2dz+rhoaux*sigw**2)) * pextra%icbt
@@ -507,14 +527,19 @@ subroutine diffusion_fields(u_star, w_star, obukhov_l)
   stress = HYPOT(xsurfstress, ysurfstress)
 
   ! Calculate friction velocity
-  u_star = sqrt(stress/rho_a)
+  u_star = stress/sqrt(rho_a)
   
-  ! Calculate the obukhov length
-  obukhov_l = - rho_a * cpa * t2m * (u_star**3)/(k*g*ishf)
+  ! Calculate the obukhov length. Negative sign removed as ECMWF convention is positive for downward flux
+  obukhov_l = rho_a * cpa * t2m * (u_star**3)/(k*g*ishf)
 
   ! Calculate the convective velocity scale, p.622/118 stull
-  w_star = ((g*hbl2*ishf)/(tv*cpa*rho_a))**0.333
-  
+  ! surface kinematic heat flux = H0/(rho*cpa)
+  w_star = ((g*hbl2*-ishf)/(tv*rho_a*cpa))**0.333
+
+  ! write(*,*) w_star(105:110, 105:110)
+  ! write(*,*) obukhov_l(105:110, 105:110)
+  ! error stop
+
 end subroutine diffusion_fields
 
 subroutine air_density(rho, rhograd, pressures)

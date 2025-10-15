@@ -185,7 +185,7 @@ PROGRAM bsnap
   USE rmpartML, only: rmpart
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
-  USE rwalkML, only: rwalk, rwalk_init, flexpart_diffusion, diffusion_scheme, bl_definition
+  USE rwalkML, only: rwalk, rwalk_init, flexpart_diffusion, diffusion_scheme, bl_definition, record_stats
   USE milibML, only: xyconvert
   use snapfldML, only: total_activity_lost_domain
   USE forwrdML, only: forwrd, forwrd_init
@@ -1127,6 +1127,9 @@ contains
       case ('diffusion.scheme')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) diffusion_scheme
+      case ('record.stats')
+        if (.not. has_value) goto 12
+        read(cinput(pname_start:pname_end),*) record_stats
       case ('bl.definition')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) bl_definition
