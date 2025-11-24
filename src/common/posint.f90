@@ -28,7 +28,8 @@ module posintML
 subroutine posint(part,tf1,tf2,tnow,pextra)
   USE particleML, only: Particle, extraParticle
   USE snapgrdML, only: gparam
-  USE snapfldML, only: xm, ym, bl1, bl2, hbl1, hbl2, precip
+  USE snapfldML, only: xm, ym, bl1, bl2, hbl1, hbl2, precip, &
+    u_star1, u_star2, w_star1, w_star2, obukhov_l1, obukhov_l2
 
 !> particle
 !> (with all particles at the same horizontal position)
@@ -44,7 +45,7 @@ subroutine posint(part,tf1,tf2,tnow,pextra)
   type(extraParticle), intent(out) :: pextra
 
   integer :: i,j
-  real :: rt1,rt2,dxgrid,dygrid,dx,dy,c1,c2,c3,c4,bl,hbl,rmx,rmy
+  real :: rt1,rt2,dxgrid,dygrid,dx,dy,c1,c2,c3,c4,bl,hbl,rmx,rmy,ol,ust,wst
   real :: pr
 
   if (.not.part%is_active()) then
@@ -83,6 +84,22 @@ subroutine posint(part,tf1,tf2,tnow,pextra)
       +rt2*(c1*hbl2(i,j)  +c2*hbl2(i+1,j) &
       +c3*hbl2(i,j+1)+c4*hbl2(i+1,j+1))
 
+  !..obukhov length
+  ol= rt1*(c1*obukhov_l1(i,j)  +c2*obukhov_l1(i+1,j) &
+      +c3*obukhov_l1(i,j+1)+c4*obukhov_l1(i+1,j+1)) &
+      +rt2*(c1*obukhov_l2(i,j)  +c2*obukhov_l2(i+1,j) &
+      +c3*obukhov_l2(i,j+1)+c4*obukhov_l2(i+1,j+1))
+  !..friction velocity
+  ust= rt1*(c1*u_star1(i,j)  +c2*u_star1(i+1,j) &
+      +c3*u_star1(i,j+1)+c4*u_star1(i+1,j+1)) &
+      +rt2*(c1*u_star2(i,j)  +c2*u_star2(i+1,j) &
+      +c3*u_star2(i,j+1)+c4*u_star2(i+1,j+1))
+  !..convective velocity scale
+  wst= rt1*(c1*w_star1(i,j)  +c2*w_star1(i+1,j) &
+      +c3*w_star1(i,j+1)+c4*w_star1(i+1,j+1)) &
+      +rt2*(c1*w_star2(i,j)  +c2*w_star2(i+1,j) &
+      +c3*w_star2(i,j+1)+c4*w_star2(i+1,j+1))
+
   !..map ratio
   rmx= c1*xm(i,j)  +c2*xm(i+1,j) &
       +c3*xm(i,j+1)+c4*xm(i+1,j+1)
@@ -99,6 +116,9 @@ subroutine posint(part,tf1,tf2,tnow,pextra)
   pextra%rmx=rmx/dxgrid
   pextra%rmy=rmy/dygrid
   pextra%prc=pr
+  pextra%ol=ol
+  pextra%wst=wst
+  pextra%ust=ust
 
 end subroutine posint
 end module posintML

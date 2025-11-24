@@ -72,6 +72,12 @@ module particleML
         real         :: zmetres
         !> height of boundary layer top in metres
         real         :: tblmetres
+        !> Obukhov Length at particle position
+        real         :: ol
+        !> Friction velocity at particle position
+        real         :: ust
+        !> Convective velocity scale at particle position
+        real         :: wst
         !> forbidden state flag
         integer      :: icbt=1
         !> vertical index

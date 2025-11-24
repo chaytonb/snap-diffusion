@@ -71,14 +71,15 @@ contains
       xm, ym, u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, pmsl1, pmsl2, &
       hbl1, hbl2, hlayer1, hlayer2, garea, hlevel1, hlevel2, &
       hlayer1, hlayer2, bl1, bl2, enspos, precip, t1_abs, t2_abs, &
-      field1, t1_dew, t2_dew, ishf, xsurfstress, ysurfstress, t2m, spec_humid, &
-      u_star, w_star, obukhov_l, rho, rhograd, pressures
+      field1, t1_dew, t2_dew, t2m, spec_humid, xflux, yflux, hflux, &
+      u_star1, u_star2, w_star1, w_star2, obukhov_l1, obukhov_l2, &
+      rho, rhograd, pressures
     USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, ptop, &
                          gparam, klevel, ivlevel, imslp, igtype, ivlayer
     USE snapmetML, only: met_params, xy_wind_units, pressure_units, omega_units, &
                          sigmadot_units, temp_units, requires_precip_deaccumulation, &
-                         downward_momentum_flux_units, instant_surface_heat_flux_units, &
-                         mass_fraction_units
+                         downward_momentum_flux_units, surface_heat_flux_units, &
+                         mass_fraction_units, acc_momentum_flux_units
     USE snapdimML, only: nx, ny, nk, output_resolution_factor, hres_field, surface_index
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
@@ -210,6 +211,9 @@ contains
 
       ps1(:, :) = ps2
       bl1(:, :) = bl2
+      obukhov_l1(:, :) = obukhov_l2
+      w_star1(:, :) = w_star2
+      u_star1(:, :) = u_star2
       hbl1(:, :) = hbl2
       t1_dew(:,:) = t2_dew
 
@@ -321,17 +325,17 @@ contains
     call fi_checkload(fio, met_params%dewtemp2m, temp_units, t2_dew(:, :), nt=timepos, nr=nr, nz=1)
 
 !.. Read in surface heat flux
-    call fi_checkload(fio, met_params%ishf, instant_surface_heat_flux_units, ishf(:, :), nt=timepos, nr=nr, nz=1)
+    call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr, nz=1)
 
 !.. Read in 2m air temperature
     call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
 !.. Read in surface stress varaibles
-    call fi_checkload(fio, met_params%xsurfstress, downward_momentum_flux_units, xsurfstress(:, :), nt=timepos, nr=nr, nz=1)
-    call fi_checkload(fio, met_params%ysurfstress, downward_momentum_flux_units, ysurfstress(:, :), nt=timepos, nr=nr, nz=1)
+    call fi_checkload(fio, met_params%xflux, acc_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr, nz=1)
+    call fi_checkload(fio, met_params%yflux, acc_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr, nz=1)
 
 !.. Calculate fields required for flexpart diffusion
-    call diffusion_fields(u_star, w_star, obukhov_l)
+    call diffusion_fields(u_star2, w_star2, obukhov_l2)
     call air_density(rho, rhograd, pressures)
 
     if (first_time_read) then

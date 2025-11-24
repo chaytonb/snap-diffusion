@@ -113,7 +113,7 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
       xm, ym, u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, pmsl1, pmsl2, &
       hbl1, hbl2, hlayer1, hlayer2, garea, hlevel1, hlevel2, &
       hlayer1, hlayer2, bl1, bl2, enspos, precip, t2m, &
-      t1_abs, t2_abs, t1_dew, t2_dew, ishf, xsurfstress, ysurfstress, field1
+      t1_abs, t2_abs, t1_dew, t2_dew, field1
   USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, ptop, &
       gparam, klevel, ivlevel, imslp, igtype, ivlayer
   USE snapmetML, only: met_params, requires_precip_deaccumulation, &
@@ -371,15 +371,8 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
 !.. Read in 2m dew point
   call nfcheckload(ncid, met_params%dewtemp2m, start3d, count3d, t2_dew(:, :))
 
-!.. Read in surface heat flux
-  call nfcheckload(ncid, met_params%ishf, start3d, count3d, ishf(:, :))
-
 !.. Read in 2m air temperature
   call nfcheckload(ncid, met_params%t2m, start3d, count3d, t2m(:, :))
-
-!.. Read in surface stress varaibles
-  call nfcheckload(ncid, met_params%xsurfstress, start3d, count3d, xsurfstress(:, :))
-  call nfcheckload(ncid, met_params%ysurfstress, start3d, count3d, ysurfstress(:, :))
 
   if (met_params%need_precipitation) then
     call read_precipitation(ncid, nhdiff_precip, timepos, timeposm1)

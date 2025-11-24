@@ -56,14 +56,14 @@ module snapfldML
   real(kind=real32), allocatable, save, public :: hlayer1(:,:,:)
   real(kind=real32), allocatable, save, public :: hlayer2(:,:,:)
 
-!> Instataneous surface heat flux
-  real(kind=real32), allocatable, save, public :: ishf(:,:)
+!> mean surface heat flux
+  real(kind=real32), allocatable, save, public :: mshf(:,:)
 
-!> Instataneous surface heat flux
-  real(kind=real32), allocatable, save, public :: xsurfstress(:,:)
+!> mean eastward surface stress
+  real(kind=real32), allocatable, save, public :: meanxsurfstress(:,:)
 
-!> Instataneous surface heat flux
-  real(kind=real32), allocatable, save, public :: ysurfstress(:,:)
+!> mean northward surface stress
+  real(kind=real32), allocatable, save, public :: meanysurfstress(:,:)
 
 !> specific humidity
   real(kind=real32), allocatable, save, public :: spec_humid(:,:,:)
@@ -78,13 +78,16 @@ module snapfldML
   real(kind=real32), allocatable, save, public :: pressures(:,:,:)
 
 !> MO length (diffusion)
-  real(kind=real32), allocatable, save, public :: obukhov_l(:,:)
+  real(kind=real32), allocatable, save, public :: obukhov_l1(:,:)
+  real(kind=real32), allocatable, save, public :: obukhov_l2(:,:)
 
 !> friction velocity
-  real(kind=real32), allocatable, save, public :: u_star(:,:)
+  real(kind=real32), allocatable, save, public :: u_star1(:,:)
+  real(kind=real32), allocatable, save, public :: u_star2(:,:)
 
 !> deardorff velocity
-  real(kind=real32), allocatable, save, public :: w_star(:,:)
+  real(kind=real32), allocatable, save, public :: w_star1(:,:)
+  real(kind=real32), allocatable, save, public :: w_star2(:,:)
 
 !> hourly precipitation intensity (mm/hour)
   real(kind=real32), allocatable, save, public :: precip(:,:)

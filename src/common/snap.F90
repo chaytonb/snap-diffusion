@@ -272,6 +272,8 @@ PROGRAM bsnap
   integer :: ntprof
   type(duration_t) :: dur
   logical :: out_of_domain
+  integer :: above_tbl_before_adv, above_tbl_after_adv
+  integer :: above_tbl_before_diffu, above_tbl_after_diffu
 
   real :: mhmin, mhmax  ! minimum and maximum of mixing height
 !> Information for reading from a releasefile
@@ -742,7 +744,9 @@ PROGRAM bsnap
 
         !..interpolation of boundary layer top, height, precipitation etc.
         !  creates and save temporary data to pextra%prc, pextra%
+        ! write(*,*) 'before interp', pdata(np)%hbl, pdata(np)%z, pdata(np)%tbl
         call posint(pdata(np), tf1, tf2, tnow, pextra)
+        ! write(*,*) 'after interp',pdata(np)%hbl, pdata(np)%z, pdata(np)%tbl
 
         !..radioactive decay
         if (idecay == 1) call decay(pdata(np))
@@ -753,8 +757,21 @@ PROGRAM bsnap
         !..wet deposition
         call wetdep(tstep, pdata(np), pextra)
 
+        ! if (pdata(np)%z < pdata(np)%tbl) then 
+        !   above_tbl_before_adv = 1 
+        ! else 
+        !   above_tbl_before_adv = 0
+        ! endif
+        ! if (np == 20) then
+        !   write(*,*) 'initial params', pdata(np)%x,pdata(np)%y,pdata(np)%z,pdata(np)%hbl,pextra%zmetres, above_tbl_before_adv
+        ! endif
+
         !..move all particles forward, save u and v to pextra
         call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
+
+        ! if (np == 20) then
+        !   write(*,*) 'after advection', pdata(np)%x,pdata(np)%y,pdata(np)%z,pdata(np)%hbl,pextra%zmetres
+        ! endif
 
         !..apply the random walk method (diffusion)
         ! diffusion is applied after deposition to mix
@@ -767,6 +784,16 @@ PROGRAM bsnap
             call rwalk(blfullmix, pdata(np), pextra)
           endif
         endif
+
+        ! if (pdata(np)%z < pdata(np)%tbl) then 
+        !   above_tbl_after_diffu = 1 
+        ! else 
+        !   above_tbl_after_diffu = 0
+        ! endif
+
+        ! if (np == 20) then
+        !   write(*,*) 'after diffusion', pdata(np)%x,pdata(np)%y,pdata(np)%z,pdata(np)%hbl,pextra%zmetres, above_tbl_after_diffu
+        ! endif
 
         !.. check domain (%active) after moving particle
         call check_in_domain(pdata(np), out_of_domain)

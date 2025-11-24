@@ -31,34 +31,46 @@ module compheightML
 !>     defined by alevel and blevel
 !>   - lower model level is level 2
 subroutine compheight()
-  USE snapgrdML, only: alevel, blevel
-  USE snapfldML, only: ps2, hlayer2, hlevel2, t2_abs
+  USE snapgrdML, only: ahalf, bhalf, alevel, blevel
+  USE snapfldML, only: ps2, hlayer2, hlevel2, t2
   USE snapfldML, only: hlayer => field3d1
   USE snaptabML, only: g, exner
   USE snapdimML, only: nx,ny,nk,hres_field
   USE ftestML, only: ftest
 
-  real, parameter :: r=287
+  real, parameter :: ginv = 1.0/g
 
-  integer :: k
-
-  real :: pe(nx, ny)
-  real :: pe2(nx, ny)
+  integer :: i,j,k
+  real :: p,pih,pif,h1,h2
+  real :: pihl(nx,ny),hlev(nx,ny)
 
 !..compute height of model levels (in the model grid)
+  hlev(:,:) = 0.0
   hlayer(:,:,nk) = 9999.0
   hlevel2(:,:,1) = 0.0
 
-  ! Calculate thickness of levels in metres
-  do k = 2, nk
-    pe = alevel(k-1) + blevel(k-1) * ps2
-    pe2 = alevel(k) + blevel(k) * ps2
-    hlayer(:, :, k-1) = (r * t2_abs(:, :, k) / g) * log(pe/pe2)
-  end do
+  pihl(:,:) = exner(ps2)
 
-  ! Calculate cumulative height of levels in metres
-  do k = 2, nk
-    hlevel2(:, :, k) = hlevel2(:, :, k-1) + hlayer(:, :, k-1)
+  do k=2,nk
+    do j=1,ny
+      do i=1,nx
+        p = ahalf(k) + bhalf(k)*ps2(i,j)
+        pih = exner(p)
+
+        p = alevel(k) + blevel(k)*ps2(i,j)
+        pif = exner(p)
+
+        h1 = hlev(i,j)
+        h2 = h1 + t2(i,j,k)*(pihl(i,j)-pih)*ginv
+
+        hlayer(i,j,k-1) = h2-h1
+        hlevel2(i,j,k) = h1 + (h2-h1)*(pihl(i,j)-pif) &
+            /(pihl(i,j)-pih)
+
+        hlev(i,j) = h2
+        pihl(i,j) = pih
+      end do
+    end do
   end do
 
   call ftest('hlayer', hlayer, contains_undef=.true., reverse_third_dim=.true.)
