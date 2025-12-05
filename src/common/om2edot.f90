@@ -19,7 +19,7 @@ module om2edotML
   implicit none
   private
 
-  public om2edot
+  public om2edot, pressure_to_eta
 
   contains
 
@@ -214,4 +214,47 @@ subroutine edcomp(nx,ny,nz,u,v,edot,ps,xmd2h,ymd2h, &
   end do
 
 end subroutine edcomp
+
+subroutine pressure_to_eta(w2)
+
+  USE snapgrdML, only: ahalf, bhalf, vhalf, klevel, gparam, vlevel, alevel, blevel, vhalf
+  USE snapfldML, only: xm, ym, ps2, u2, v2, hlevel2
+  USE snapdimML, only: nx,ny,nk
+  USE snapdebug, only: iulog
+
+  real, intent(inout) :: w2(nx, ny, nk)
+  real :: weta(nx,ny,nk)
+
+  integer :: i,j,k
+
+  ! Interior points
+  do k = 3, nk-1
+    do j = 1, ny
+      do i = 1, nx
+        weta(i,j,k) = w2(i,j,k)/ (((ahalf(k+1) - ahalf(k-1)) + (bhalf(k+1) - bhalf(k-1)) * &
+                      ps2(i,j)) / (vhalf(k+1) - vhalf(k-1)))
+      end do
+    end do
+  end do
+
+  ! Bottom boundary
+  do j = 1, ny
+    do i = 1, nx
+      weta(i,j,2) = w2(i,j,2)/ (((ahalf(3) - ahalf(2)) + (bhalf(3) - bhalf(2)) * &
+                    ps2(i,j)) / (vhalf(3) - vhalf(2)))
+    end do
+  end do
+
+  ! Top boundary
+  do j = 1, ny
+    do i = 1, nx
+      weta(i,j,nk) = w2(i,j,nk)/ (((ahalf(nk) - ahalf(nk-1)) + (bhalf(nk) - bhalf(nk-1)) * &
+                    ps2(i,j)) / (vhalf(nk) - vhalf(nk-1)))
+    end do
+  end do
+
+  w2 = weta
+
+end subroutine pressure_to_eta
+
 end module om2edotML

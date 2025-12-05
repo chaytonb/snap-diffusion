@@ -24,7 +24,7 @@ module readfield_fiML
   USE snapfimexML, ONLY: file_type, conf_file, interpolation, fint, parse_interpolator
   use iso_fortran_env, only: real32, real64, error_unit
   USE ftestML, only: ftest
-  USE om2edotML, only: om2edot
+  USE om2edotML, only: om2edot, pressure_to_eta
   USE milibML, only: mapfield
   USE snaptabML, only: t2thetafac
   USE snapdebug, only: iulog, idebug
@@ -72,7 +72,7 @@ contains
       hbl1, hbl2, hlayer1, hlayer2, garea, hlevel1, hlevel2, &
       hlayer1, hlayer2, bl1, bl2, enspos, precip, t1_abs, t2_abs, &
       field1, t1_dew, t2_dew, t2m, spec_humid, xflux, yflux, hflux, &
-      u_star1, u_star2, w_star1, w_star2, obukhov_l1, obukhov_l2, &
+      u_star1, u_star2, w_star, obukhov_l1, obukhov_l2, &
       rho, rhograd, pressures
     USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, ptop, &
                          gparam, klevel, ivlevel, imslp, igtype, ivlayer
@@ -212,7 +212,6 @@ contains
       ps1(:, :) = ps2
       bl1(:, :) = bl2
       obukhov_l1(:, :) = obukhov_l2
-      w_star1(:, :) = w_star2
       u_star1(:, :) = u_star2
       hbl1(:, :) = hbl2
       t1_dew(:,:) = t2_dew
@@ -335,7 +334,7 @@ contains
     call fi_checkload(fio, met_params%yflux, acc_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr, nz=1)
 
 !.. Calculate fields required for flexpart diffusion
-    call diffusion_fields(u_star2, w_star2, obukhov_l2)
+    call diffusion_fields(u_star2, w_star, obukhov_l2)
     call air_density(rho, rhograd, pressures)
 
     if (first_time_read) then
@@ -407,7 +406,8 @@ contains
     
     if (met_params%sigmadot_is_omega) then
       !..omega -> etadot, or rather etadot derived from continuity-equation (mean of both)
-      call om2edot
+      ! call om2edot
+      call pressure_to_eta(w2)
     else if (met_params%sigmadotv == '') then
       !..omega -> etadot, or rather etadot derived from continuity-equation
       call om2edot
@@ -1155,6 +1155,8 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
       bl_top_pressure = pressure_below + weight * (pressure_above - pressure_below)
 
       vbl(i, j) = bl_top_pressure / ps2(i, j)
+
+      ! vbl(i,j) = 600
 
     end do
   end do

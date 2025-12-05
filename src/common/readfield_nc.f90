@@ -1219,12 +1219,17 @@ subroutine compute_vertical_coords(alev, blev, ptop)
     end if
   end do
 
+  ahalf(2) = 0
+  ahalf(3) = 0.03757813
+  ahalf(4) = 0.228359375
+
   do k=1,nk
     p = alevel(k) + blevel(k) * standard_atmosphere
     vlevel(k) = (p - ptop) / (standard_atmosphere - ptop)
     p = ahalf(k) + bhalf(k) * standard_atmosphere
     vhalf(k) = (p - ptop) / (standard_atmosphere - ptop)
   end do
+
 
   vhalf(1) = vlevel(1)
   vhalf(nk) = vlevel(nk)

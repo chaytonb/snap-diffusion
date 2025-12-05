@@ -168,7 +168,7 @@ PROGRAM bsnap
   USE snapdimML, only: nx, ny, nk, output_resolution_factor, ldata, maxsiz, mcomp, surface_index
   USE snapfilML, only: filef, itimer, ncsummary, nctitle, nhfmax, nhfmin, &
                        nctype, nfilef, simulation_start, spinup_steps
-  USE snapfldML, only: nhfout, enspos
+  USE snapfldML, only: nhfout, enspos, hlevel2, ps2
   USE snapmetML, only: init_meteo_params, met_params
   USE snapparML, only: component, run_comp, output_component, &
                        ncomp, nocomp, def_comp, nparnum, &
@@ -176,7 +176,8 @@ PROGRAM bsnap
   USE snapposML, only: irelpos, nrelpos, release_positions
   USE snapgrdML, only: modleveldump, &
                        klevel, imslp, itotcomp, gparam, &
-                       igtype, imodlevel, modlevel_is_average, precipitation_in_output
+                       igtype, imodlevel, modlevel_is_average, precipitation_in_output, &
+                       ivlayer, vlevel, alevel, blevel
   USE snaptabML, only: tabcon
   USE particleML, only: pdata, extraParticle
   USE allocateFieldsML, only: allocateFields, deallocateFields
@@ -185,7 +186,8 @@ PROGRAM bsnap
   USE rmpartML, only: rmpart
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
-  USE rwalkML, only: rwalk, rwalk_init, flexpart_diffusion, diffusion_scheme, bl_definition, record_stats
+  USE rwalkML, only: rwalk, rwalk_init, flexpart_diffusion, diffusion_scheme, bl_definition, record_stats, &
+                      num_neutral, num_stable, num_unstable
   USE milibML, only: xyconvert
   use snapfldML, only: total_activity_lost_domain
   USE forwrdML, only: forwrd, forwrd_init
@@ -267,6 +269,8 @@ PROGRAM bsnap
   real :: tstep = 900
   real :: rmlimit = -1.0, rnhrel, tf1, tf2, tnow, tnext
   real ::    x(1), y(1)
+  real :: weight, above_layer, below_layer,j, pressure_above, pressure_below, blmax_pressure
+  integer:: ivlvl, above_index, below_index, height_k
   type(extraParticle) :: pextra
   real ::    rscale
   integer :: ntprof
@@ -746,7 +750,6 @@ PROGRAM bsnap
         !  creates and save temporary data to pextra%prc, pextra%
         ! write(*,*) 'before interp', pdata(np)%hbl, pdata(np)%z, pdata(np)%tbl
         call posint(pdata(np), tf1, tf2, tnow, pextra)
-        ! write(*,*) 'after interp',pdata(np)%hbl, pdata(np)%z, pdata(np)%tbl
 
         !..radioactive decay
         if (idecay == 1) call decay(pdata(np))
@@ -757,21 +760,8 @@ PROGRAM bsnap
         !..wet deposition
         call wetdep(tstep, pdata(np), pextra)
 
-        ! if (pdata(np)%z < pdata(np)%tbl) then 
-        !   above_tbl_before_adv = 1 
-        ! else 
-        !   above_tbl_before_adv = 0
-        ! endif
-        ! if (np == 20) then
-        !   write(*,*) 'initial params', pdata(np)%x,pdata(np)%y,pdata(np)%z,pdata(np)%hbl,pextra%zmetres, above_tbl_before_adv
-        ! endif
-
         !..move all particles forward, save u and v to pextra
         call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
-
-        ! if (np == 20) then
-        !   write(*,*) 'after advection', pdata(np)%x,pdata(np)%y,pdata(np)%z,pdata(np)%hbl,pextra%zmetres
-        ! endif
 
         !..apply the random walk method (diffusion)
         ! diffusion is applied after deposition to mix
@@ -785,16 +775,6 @@ PROGRAM bsnap
           endif
         endif
 
-        ! if (pdata(np)%z < pdata(np)%tbl) then 
-        !   above_tbl_after_diffu = 1 
-        ! else 
-        !   above_tbl_after_diffu = 0
-        ! endif
-
-        ! if (np == 20) then
-        !   write(*,*) 'after diffusion', pdata(np)%x,pdata(np)%y,pdata(np)%z,pdata(np)%hbl,pextra%zmetres, above_tbl_after_diffu
-        ! endif
-
         !.. check domain (%active) after moving particle
         call check_in_domain(pdata(np), out_of_domain)
         if (out_of_domain) then
@@ -804,6 +784,7 @@ PROGRAM bsnap
         endif
 
       end do part_do
+      ! write(*,*) num_unstable, num_neutral, num_stable
       !$OMP END PARALLEL DO
       call particleloop_timer%stop_and_log()
 
@@ -970,7 +951,7 @@ contains
     use fldout_ncML, only: surface_layer_is_lowest_level, surface_height_m
     use snapparML, only: GRAV_TYPE_UNDEFINED, GRAV_TYPE_OFF, GRAV_TYPE_FIXED
     use rwalkML, only: diffusion_b => b, diffusion_a_in_bl => a_in_bl, diffusion_a_above_bl => a_above_bl, &
-                       bl_definition, diffusion_scheme
+                       bl_definition, diffusion_scheme, reflection_handling
 
     !> Open file unit
     integer, intent(in) :: snapinput_unit
@@ -1160,6 +1141,9 @@ contains
       case ('bl.definition')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) bl_definition
+      case ('reflection.handling')
+        if (.not. has_value) goto 12
+        read(cinput(pname_start:pname_end),*) reflection_handling
       case ('diffusion.b.value')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) diffusion_b

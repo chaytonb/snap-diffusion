@@ -33,6 +33,16 @@ module particleML
         real(real64)   :: y
         !> sigma/eta position (vertical)
         real(real64)   :: z
+        !> turbulent u velocity
+        real         :: turbvelu
+        !> turbulent v velocity
+        real         :: turbvelv
+        !> turbulent w velocity
+        real         :: turbvelw
+        !> height of particle in metres
+        real         :: zmetres
+        !> forbidden state flag
+        integer      :: icbt=1
         !> sigma/eta at top of boundary layer
         real           :: tbl
         !> radioactive content (Bq)
@@ -62,24 +72,12 @@ module particleML
         real(real64) :: rmy
         !> precipition intensity (mm/hour)
         real         :: prc
-        !> turbulent u velocity
-        real         :: turbvelu
-        !> turbulent v velocity
-        real         :: turbvelv
-        !> turbulent w velocity
-        real         :: turbvelw
-        !> height of particle in metres
-        real         :: zmetres
-        !> height of boundary layer top in metres
-        real         :: tblmetres
         !> Obukhov Length at particle position
         real         :: ol
         !> Friction velocity at particle position
         real         :: ust
         !> Convective velocity scale at particle position
         real         :: wst
-        !> forbidden state flag
-        integer      :: icbt=1
         !> vertical index
         integer      :: k
     end type extraParticle
