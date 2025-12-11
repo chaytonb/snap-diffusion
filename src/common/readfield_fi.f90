@@ -72,8 +72,7 @@ contains
       hbl1, hbl2, hlayer1, hlayer2, garea, hlevel1, hlevel2, &
       hlayer1, hlayer2, bl1, bl2, enspos, precip, t1_abs, t2_abs, &
       field1, t1_dew, t2_dew, t2m, spec_humid, xflux, yflux, hflux, &
-      u_star1, u_star2, w_star, obukhov_l1, obukhov_l2, &
-      rho, rhograd, pressures
+      u_star1, u_star2, w_star1, w_star2, obukhov_l1, obukhov_l2, rho, rhograd, pressures
     USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, ptop, &
                          gparam, klevel, ivlevel, imslp, igtype, ivlayer
     USE snapmetML, only: met_params, xy_wind_units, pressure_units, omega_units, &
@@ -211,8 +210,9 @@ contains
 
       ps1(:, :) = ps2
       bl1(:, :) = bl2
-      obukhov_l1(:, :) = obukhov_l2
       u_star1(:, :) = u_star2
+      w_star1(:, :) = w_star2
+      obukhov_l1(:, :) = obukhov_l2
       hbl1(:, :) = hbl2
       t1_dew(:,:) = t2_dew
 
@@ -284,6 +284,9 @@ contains
       end if
 
     end do ! k=nk,2,-1
+    ! write(*,*) 'spec humid reading for time ', timepos, spec_humid(108, 102, :)
+    ! error stop
+
 
 !..surface pressure, 10m wind and possibly mean sea level pressure,
 !..precipitation
@@ -334,7 +337,7 @@ contains
     call fi_checkload(fio, met_params%yflux, acc_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr, nz=1)
 
 !.. Calculate fields required for flexpart diffusion
-    call diffusion_fields(u_star2, w_star, obukhov_l2)
+    call diffusion_fields(u_star2, w_star2, obukhov_l2)
     call air_density(rho, rhograd, pressures)
 
     if (first_time_read) then

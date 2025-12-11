@@ -760,6 +760,30 @@ PROGRAM bsnap
         !..wet deposition
         call wetdep(tstep, pdata(np), pextra)
 
+        ! find eta coordinate of 600metres at particle location
+        if (bl_definition=='constant') then
+          i = pdata(np)%x
+          j = pdata(np)%y
+          above_index = nk
+          do k = 2, nk
+            height_k = hlevel2(i, j, k)
+            if (600 < height_k) then
+                above_index = k
+                exit  
+            end if
+          end do
+
+          below_index = above_index - 1
+
+          pressure_below = alevel(below_index) + blevel(below_index) * ps2(i,j)
+          pressure_above = alevel(above_index) + blevel(above_index) * ps2(i,j) 
+
+          weight = (600 - hlevel2(i, j, below_index)) /  &
+          (hlevel2(i, j, above_index) - hlevel2(i, j, below_index))
+
+          pdata(np)%tbl = (pressure_below + weight * (pressure_above - pressure_below))/ ps2(i, j)
+        endif
+        
         !..move all particles forward, save u and v to pextra
         call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
 

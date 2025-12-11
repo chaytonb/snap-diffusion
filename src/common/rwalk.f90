@@ -111,6 +111,11 @@ subroutine rwalk(blfullmix,part,pextra)
   call random_number(rnd)
   rnd = rnd - 0.5
 
+  if (bl_definition == 'constant') then
+    part%hbl = 600
+    part%tbl = 0.929817438
+  endif
+
 ! horizontal diffusion
   if (part%z > part%tbl) then ! in boundary layer
     a = a_in_bl
@@ -173,7 +178,7 @@ end subroutine rwalk
 
 subroutine flexpart_diffusion(part,pextra)
   USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: hlevel2, ps2
+  USE snapfldML, only: hlevel2, ps2, hlayer2
   USE snapgrdML, only: ivlayer, vlevel, alevel, blevel
   use snapdimML, only: nk
 
@@ -220,7 +225,7 @@ subroutine flexpart_diffusion(part,pextra)
 
   height_init = part%z
   ! Check if particle within abl
-  if (part%zmetres.lt.part%hbl) then
+  if (part%z.gt.part%tbl) then
     call flexpart_diffusion_within_abl(part,pextra,nrand,max_rands,rands)
     ! call flexpart_diffusion_within_abl_hor_only(part,pextra,nrand,max_rands,rands)
     ! call rwalk(.FALSE.,part,pextra)
@@ -278,8 +283,8 @@ end subroutine flexpart_diffusion
 
 subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands) ! Based on Hanna1 from FLEXPART code, turbswitch FALSE
   USE particleML, only: extraParticle, Particle
-  use snapfldML, only: rho, rhograd, w_star, hflux, obukhov_l2
-  USE snapgrdML, only: ivlayer
+  use snapfldML, only: rho, rhograd
+  USE snapgrdML, only: ivlayer, ivlevel
   
   !> particle with information
   type(Particle), intent(inout)  :: part
@@ -315,8 +320,8 @@ subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands) 
   part_vert_index = part%z*10000
   k = ivlayer(part_vert_index) ! Vertical layer of particle
 
-  wst = w_star(i, j)
-  ol = obukhov_l2(i,j)
+  wst = pextra%wst
+  ol = pextra%ol
   
   ! Case 1, Neutral Conditions
   if (part%hbl/ABS(ol).lt.1.) then
@@ -352,11 +357,6 @@ subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands) 
     sigu=pextra%ust*(12.-0.5*part%hbl/ol)**0.33333
     sigu=MAX(sigu,1.e-6)
     sigv=sigu
-
-    if (ISNAN(wst)) then
-      wst = 0.8
-      write(*,*) 'WARNING: fixed NaN for w_star at ', part%x, part%y
-    endif
 
     ! Eq. 7.15 Hanna 1982
     if (scaled_height.lt.0.03) then
@@ -442,7 +442,6 @@ subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands) 
 
   ! Factor for density correction, k+1 to avoid artificial first layer
   rhoaux=rhograd(i,j,k+1)/rho(i,j,k+1)
-
   ! rhoaux=-0.000095
 
   ! ratio of time step to lagrangian timescale for autocorrelation
@@ -454,6 +453,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra, nrand, max_rands, rands) 
   part%turbvelw=(rw*part%turbvelw+rands(nrand)*sqrt(1.-rw**2)*sigw &
         +tlw*(1.-rw)*(dsigw2dz+rhoaux*sigw**2)) * part%icbt
   delz=part%turbvelw*tstep 
+  nrand=nrand+1
 
   ! Calculate new vertical position
   if (abs(delz).gt.part%hbl) then
@@ -538,7 +538,7 @@ end subroutine flexpart_diffusion_above_abl
 
 subroutine dipcot_diffusion_within_bl(part, pextra, nrand, max_rands, rands) 
   USE particleML, only: extraParticle, Particle
-  use snapfldML, only: rho, rhograd, w_star
+  use snapfldML, only: rho, rhograd, w_star2
   USE snapgrdML, only: ivlayer
   
   !> particle with information
@@ -573,7 +573,7 @@ subroutine dipcot_diffusion_within_bl(part, pextra, nrand, max_rands, rands)
   j = part%y
   part_vert_index = part%z*10000
   k = ivlayer(part_vert_index) ! Vertical layer of particle
-  wst = w_star(i,j)
+  wst = pextra%wst
   
   ! Case 1, Neutral Conditions
   if (part%hbl/ABS(pextra%ol).lt.1.) then
@@ -708,7 +708,8 @@ subroutine dipcot_diffusion_within_bl(part, pextra, nrand, max_rands, rands)
     part%zmetres = -part%zmetres - delz
     part%icbt = -1
   else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
-    part%zmetres = -part%zmetres-delz+2.*part%hbl    ! open(unit=11, file="turb_params_flex.dat", status="unknown", position="append")
+    part%zmetres = -part%zmetres-delz+2.*part%hbl    
+    ! open(unit=11, file="turb_params_flex.dat", status="unknown", position="append")
     ! write(11,'(10F12.6)') rw, tlw, dsigw2dz, rhoaux, sigw, ol, h, ust, zts, zeta
     ! close(11)
     part%icbt = -1
@@ -747,13 +748,14 @@ subroutine dipcot_diffusion_within_bl(part, pextra, nrand, max_rands, rands)
 
 end subroutine dipcot_diffusion_within_bl
 
-subroutine diffusion_fields(u_star, w_star, obukhov_l)
+subroutine diffusion_fields(u_star, w_star, obukhov_length)
   use snapfldML, only: ps2, t2m, t2_dew, hbl2, xflux, yflux, hflux
   use snapdimML, only: nx, ny
+  use, intrinsic :: ieee_arithmetic
 
   real, intent(out) :: u_star(:, :)
   real, intent(out) :: w_star(:, :)
-  real, intent(out) :: obukhov_l(:, :)
+  real, intent(out) :: obukhov_length(:, :)
 
   real, parameter :: r=287, g=9.81, k=0.4, cpa=1004.6
 
@@ -784,7 +786,7 @@ subroutine diffusion_fields(u_star, w_star, obukhov_l)
   u_star = sqrt(stress/(rho_a))
 
   ! Calculate the obukhov length. Negative sign removed as ECMWF convention is positive for downward flux
-  obukhov_l = rho_a * cpa * t2m * (u_star**3)/(k*g*hflux)
+  obukhov_length = rho_a * cpa * t2m * (u_star**3)/(k*g*hflux)
 
   ! Calculate the convective velocity scale, p.622/118 stull
   ! surface kinematic heat flux = H0/(rho*cpa)
@@ -793,15 +795,19 @@ subroutine diffusion_fields(u_star, w_star, obukhov_l)
   endif
   w_star = ((g*hbl2*-hflux)/(tv*rho_a*cpa))**0.333
 
-  write(*,*) w_star(125,90), hflux(125,90)
+  where (ieee_is_nan(w_star))
+    w_star = 0.0
+  end where
+
+ !  write(*,*) w_star(125,90), hflux(125,90)
 
 
 end subroutine diffusion_fields
 
 subroutine air_density(rho, rhograd, pressures)
-  use snapfldML, only: spec_humid, t2_abs, ps2, hlevel2
+  use snapfldML, only: spec_humid, t2_abs, ps2, hlevel2, t2
   use snapdimML, only: nx, ny, nk
-  use snapgrdML, only: alevel, blevel
+  use snapgrdML, only: alevel, blevel, vlevel, vhalf
 
   real, parameter :: r = 287.0
 
@@ -813,7 +819,7 @@ subroutine air_density(rho, rhograd, pressures)
   integer :: i, j, k
 
   ! Compute virtual temperature where defined (k >= 2)
-  tv = t2_abs * (1.0 + 0.608 * spec_humid)
+  tv = t2 * (1.0 + 0.608 * spec_humid)
 
   ! Surface virtual temperature is undefined so copy from level 2
   do j = 1, ny
@@ -822,12 +828,13 @@ subroutine air_density(rho, rhograd, pressures)
     end do
   end do
 
-  ! Compute pressure at full levels (including the synthetic surface level)
+  ! Compute pressure at full levels (including the surface level)
   do j = 1, ny
     do i = 1, nx
       do k = 1, nk
-        pressures(i,j,k) = alevel(k) + blevel(k) * ps2(i,j) * 100.0
+        pressures(i,j,k) = alevel(k) * 100 + blevel(k) * ps2(i,j) * 100.0
       end do
+      pressures(i,j,2) = ps2(i,j) * 100.0
     end do
   end do
 
@@ -867,6 +874,18 @@ subroutine air_density(rho, rhograd, pressures)
                         / ( hlevel2(i,j,nk) - hlevel2(i,j,nk-1) )
     end do
   end do
+
+  ! write(*,*) 'Spec humid ', spec_humid(108, 102, :)
+  ! write(*,*) 'Virtual temp ', tv(108, 102, :)
+  ! write(*,*) 'alevel ', alevel(:)
+  ! write(*,*) 'blevel ', blevel(:)
+  ! write(*,*) 'vlevel ', vlevel(:)
+  ! write(*,*) 'hlevel ', hlevel2(108, 102, :)
+  ! write(*,*) 'vhalf ', vhalf(:)
+  ! write(*,*) 'Pressures ', pressures(108, 102, :)
+  ! write(*,*) 'rho ', rho(108, 102, :)
+  ! write(*,*) 'rhograd ', rhograd(108, 102, :)
+  !error stop
 
 end subroutine
 

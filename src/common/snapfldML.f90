@@ -86,7 +86,8 @@ module snapfldML
   real(kind=real32), allocatable, save, public :: u_star2(:,:)
 
 !> deardorff velocity
-  real(kind=real32), allocatable, save, public :: w_star(:,:)
+  real(kind=real32), allocatable, save, public :: w_star1(:,:)
+  real(kind=real32), allocatable, save, public :: w_star2(:,:)
 
 !> hourly precipitation intensity (mm/hour)
   real(kind=real32), allocatable, save, public :: precip(:,:)
