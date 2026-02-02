@@ -39,6 +39,10 @@ module particleML
         real         :: turbvelv
         !> turbulent w velocity
         real         :: turbvelw
+        !> Lagrangian timescale
+        real         :: tlw = 50
+        !> Particle timestep
+        real         :: ptstep
         !> height of particle in metres
         real         :: zmetres
         !> forbidden state flag

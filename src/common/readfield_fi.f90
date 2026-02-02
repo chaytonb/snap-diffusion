@@ -82,7 +82,7 @@ contains
     USE snapdimML, only: nx, ny, nk, output_resolution_factor, hres_field, surface_index
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
-    USE rwalkML, only: bl_definition, diffusion_fields, air_density
+    USE rwalkML, only: bl_definition, diffusion_fields, air_density, meteo_type
     USE compheightML, only: compheight
 !> current timestep (always positive), negative istep means reset
     integer, intent(in) :: istep
@@ -111,7 +111,13 @@ contains
     integer :: ifb, kfb
     real :: p, px, p0
 
+    real, allocatable :: tmp1(:, :), tmp2(:, :)
+
     integer :: timepos, timeposm1, nr
+
+    allocate(tmp1, tmp2, MOLD=ps2)
+
+  ! Calculate new hor
 
     ierror = 0
 
@@ -273,6 +279,12 @@ contains
 
       !..sigma_dot/eta_dot (0 at surface)
       !..eta: eta_dot (or omega) stored in the same levels as u,v,th.
+
+      ! Flexextract data pulls w in sigma but then converts it to omega, so need to convert it back
+      if (meteo_type=='flexextract') then
+        met_params%sigmadot_is_omega = .true.
+      endif
+
       if (met_params%sigmadotv == '') then
         w2 = 0
       else
@@ -284,8 +296,6 @@ contains
       end if
 
     end do ! k=nk,2,-1
-    ! write(*,*) 'spec humid reading for time ', timepos, spec_humid(108, 102, :)
-    ! error stop
 
 
 !..surface pressure, 10m wind and possibly mean sea level pressure,
@@ -326,15 +336,43 @@ contains
 !.. Read in 2m dew point
     call fi_checkload(fio, met_params%dewtemp2m, temp_units, t2_dew(:, :), nt=timepos, nr=nr, nz=1)
 
-!.. Read in surface heat flux
-    call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr, nz=1)
-
 !.. Read in 2m air temperature
     call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
 !.. Read in surface stress varaibles
-    call fi_checkload(fio, met_params%xflux, acc_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr, nz=1)
-    call fi_checkload(fio, met_params%yflux, acc_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr, nz=1)
+    if (meteo_type == 'flexextract') then
+      call fi_checkload(fio, met_params%xflux, acc_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr, nz=1)
+      call fi_checkload(fio, met_params%yflux, acc_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr, nz=1)
+      call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr, nz=1)
+
+    else 
+      ! Fluxes are integrated: Deaccumulate
+      if (timepos == 1) then
+        call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr)
+        call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr)
+      else
+        call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
+        call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, tmp2(:, :), nt=timepos, nr=nr)
+        xflux(:,:) = tmp2 - tmp1
+
+        call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
+        call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, tmp2(:, :), nt=timepos, nr=nr)
+        yflux(:,:) = tmp2 - tmp1
+      endif
+      ! TODO: Normalise by difference between intervals
+      xflux(:,:) =  xflux / 3600
+      yflux(:,:) =  yflux / 3600
+
+      if (timepos == 1) then
+        call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr)
+      else
+        call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
+        call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, tmp2(:, :), nt=timepos, nr=nr)
+        hflux(:,:) = tmp2 - tmp1
+      endif
+      ! TODO: Normalise by difference between intervals
+      hflux(:,:) = hflux / 3600 ! Follow conventions for up/down
+    endif
 
 !.. Calculate fields required for flexpart diffusion
     call diffusion_fields(u_star2, w_star2, obukhov_l2)

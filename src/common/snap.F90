@@ -186,8 +186,8 @@ PROGRAM bsnap
   USE rmpartML, only: rmpart
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
-  USE rwalkML, only: rwalk, rwalk_init, flexpart_diffusion, diffusion_scheme, bl_definition, record_stats, &
-                      num_neutral, num_stable, num_unstable
+  USE rwalkML, only: rwalk_init, diffusion_scheme, bl_definition, record_stats, &
+                      num_neutral, num_stable, num_unstable, turbulence_master, eta_to_metres
   USE milibML, only: xyconvert
   use snapfldML, only: total_activity_lost_domain
   USE forwrdML, only: forwrd, forwrd_init
@@ -265,8 +265,11 @@ PROGRAM bsnap
   integer :: date_time(8)
   logical :: warning = .false.
   integer :: npartmax
+  real :: dt_part
+  real :: t_local
   !> tstep: timestep in seconds
   real :: tstep = 900
+  logical :: adaptive_timesteps = .false.
   real :: rmlimit = -1.0, rnhrel, tf1, tf2, tnow, tnext
   real ::    x(1), y(1)
   real :: weight, above_layer, below_layer,j, pressure_above, pressure_below, blmax_pressure
@@ -748,7 +751,6 @@ PROGRAM bsnap
 
         !..interpolation of boundary layer top, height, precipitation etc.
         !  creates and save temporary data to pextra%prc, pextra%
-        ! write(*,*) 'before interp', pdata(np)%hbl, pdata(np)%z, pdata(np)%tbl
         call posint(pdata(np), tf1, tf2, tnow, pextra)
 
         !..radioactive decay
@@ -783,28 +785,63 @@ PROGRAM bsnap
 
           pdata(np)%tbl = (pressure_below + weight * (pressure_above - pressure_below))/ ps2(i, j)
         endif
-        
         !..move all particles forward, save u and v to pextra
-        call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
 
         !..apply the random walk method (diffusion)
         ! diffusion is applied after deposition to mix
         ! before output (which computes surface concentrations)
 
-        if (use_random_walk) then
-          if (diffusion_scheme == 'flexpart') then
-            call flexpart_diffusion(pdata(np), pextra)
-          else
-            call rwalk(blfullmix, pdata(np), pextra)
-          endif
-        endif
+        if (adaptive_timesteps) then 
 
-        !.. check domain (%active) after moving particle
-        call check_in_domain(pdata(np), out_of_domain)
-        if (out_of_domain) then
-          m = def_comp(pdata(np)%icomp)%to_output
-          total_activity_lost_domain(m) = &
-            total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
+          t_local = 0.0
+          do while (t_local < tstep)
+            
+            ! if (np==1) then
+            !   write(*,*) 'before turb', pdata(np)%turbvelw, pdata(np)%zmetres, pdata(np)%z, pdata(np)%ptstep
+            ! endif
+
+            pdata(np)%ptstep = pdata(np)%tlw * 0.2
+            ! Ensure it does not exceed the global timestep window
+            pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
+
+            call turbulence_master(blfullmix, pdata(np), pextra)
+
+            ! if (np==1) then
+            !   write(*,*) 'after turb',pdata(np)%turbvelw, pdata(np)%zmetres, pdata(np)%z, pdata(np)%ptstep
+            ! endif
+
+            call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+
+            ! if (np==1) then
+            !   write(*,*) 'before conversion',pdata(np)%turbvelw, pdata(np)%zmetres, pdata(np)%z, pdata(np)%ptstep
+            !   call eta_to_metres(pdata(np), pextra)
+            !   write(*,*) 'after advec',pdata(np)%turbvelw, pdata(np)%zmetres, pdata(np)%z, pdata(np)%ptstep
+            !   call sleep(1)
+            ! endif
+
+            call check_in_domain(pdata(np), out_of_domain)
+            if (out_of_domain) then
+              m = def_comp(pdata(np)%icomp)%to_output
+              total_activity_lost_domain(m) = &
+                total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
+            endif
+
+            t_local = t_local + pdata(np)%ptstep
+          end do
+
+        else
+          call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
+
+          if (use_random_walk) then
+            call turbulence_master(blfullmix, pdata(np), pextra)
+          endif
+          !.. check domain (%active) after moving particle
+          call check_in_domain(pdata(np), out_of_domain)
+          if (out_of_domain) then
+            m = def_comp(pdata(np)%icomp)%to_output
+            total_activity_lost_domain(m) = &
+              total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
+          endif
         endif
 
       end do part_do
@@ -975,7 +1012,7 @@ contains
     use fldout_ncML, only: surface_layer_is_lowest_level, surface_height_m
     use snapparML, only: GRAV_TYPE_UNDEFINED, GRAV_TYPE_OFF, GRAV_TYPE_FIXED
     use rwalkML, only: diffusion_b => b, diffusion_a_in_bl => a_in_bl, diffusion_a_above_bl => a_above_bl, &
-                       bl_definition, diffusion_scheme, reflection_handling
+                       bl_definition, diffusion_scheme, entrainment_scheme, meteo_type, turb_homogeneous
 
     !> Open file unit
     integer, intent(in) :: snapinput_unit
@@ -1165,9 +1202,24 @@ contains
       case ('bl.definition')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) bl_definition
-      case ('reflection.handling')
+      case ('meteo.type')
         if (.not. has_value) goto 12
-        read(cinput(pname_start:pname_end),*) reflection_handling
+        read(cinput(pname_start:pname_end),*) meteo_type
+      case ('entrainment.scheme')
+        if (.not. has_value) goto 12
+        read(cinput(pname_start:pname_end),*) entrainment_scheme
+      case ('turb.homogeneous.off')
+        !..inhomogeneous turbulence
+        turb_homogeneous = .FALSE.
+      case ('turb.homogeneous.on')
+        !..homogeneous turbulence
+        turb_homogeneous = .TRUE.
+      case ('adaptive.timesteps.on')
+        !..homogeneous turbulence
+        adaptive_timesteps = .TRUE.
+      case ('adaptive.timesteps.off')
+        !..homogeneous turbulence
+        adaptive_timesteps = .FALSE.
       case ('diffusion.b.value')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) diffusion_b

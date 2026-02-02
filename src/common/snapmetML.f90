@@ -103,7 +103,7 @@ module snapmetML
   character(len=*), parameter, public :: precip_units_fallback = 'mm'
   character(len=*), parameter, public :: temp_units = 'K'
 
-  character(len=*), parameter, public :: downward_momentum_flux_units = 'N/m^2'
+  character(len=*), parameter, public :: downward_momentum_flux_units = 'N s/m^2'
   character(len=*), parameter, public :: surface_roughness_length_units = 'm'
   character(len=*), parameter, public :: surface_heat_flux_units = 'W s/m^2'
   character(len=*), parameter, public :: acc_momentum_flux_units = 'N s/m^2'
@@ -211,7 +211,7 @@ module snapmetML
       met_params%apv = 'ap'
       met_params%bv = 'b'
       met_params%sigmadotv = 'etadot' !'lagrangian_tendency_of_atmosphere_sigma_coordinate_ml'
-      met_params%sigmadot_is_omega = .true.
+      met_params%sigmadot_is_omega = .false.
       met_params%psv = 'surface_air_pressure'
       met_params%mslpv = 'air_pressure_at_sea_level'
       met_params%precaccumv = ''

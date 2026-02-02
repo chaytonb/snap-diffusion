@@ -1649,6 +1649,7 @@ subroutine accumulate_fields(tf1, tf2, tnow, tstep, nsteph)
       if (k==1) then
         i = hres_pos(part%x)
         j = hres_pos(part%y)
+        ! write(*,*) part%x,part%y,i,j
         m = def_comp(part%icomp)%to_output
         concen(i,j,m) = concen(i,j,m) + dble(part%rad())
       endif

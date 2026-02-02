@@ -261,6 +261,7 @@ subroutine release(istep,nsteph,tf1,tf2,tnow,ierror)
 
     x= release_positions(irelpos)%grid_x
     y= release_positions(irelpos)%grid_y
+    ! write(*,*) 'release pos', x, y
 
   !..compute height in model (eta/sigma) levels
 
