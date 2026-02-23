@@ -159,8 +159,6 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
     ntav2 = 0
   end if
 
-  write(*,*) 'called'
-
 !..get time offset in hours (as iavail(n)%oHour)
   ntav1 = ntav2
   ntav2 = find_index(istep < 0, backward, itimei, ihr1, ihr2)

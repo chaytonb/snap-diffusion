@@ -34,11 +34,11 @@ module particleML
         !> sigma/eta position (vertical)
         real(real64)   :: z
         !> turbulent u velocity
-        real         :: turbvelu
+        real(real64)   :: turbvelu
         !> turbulent v velocity
-        real         :: turbvelv
+        real(real64)   :: turbvelv
         !> turbulent w velocity
-        real         :: turbvelw
+        real(real64)   :: turbvelw
         !> Lagrangian timescale
         real         :: tlw = 50
         !> Particle timestep

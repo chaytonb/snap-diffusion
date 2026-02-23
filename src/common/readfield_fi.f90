@@ -66,12 +66,12 @@ contains
 !> Read fields from fimex files. (see fimex.F90)
   subroutine readfield_fi(istep, backward, itimei, ihr1, ihr2, itimefi, ierror)
     USE iso_fortran_env, only: error_unit
-    USE snapfilML, only: iavail, filef
+    USE snapfilML, only: iavail, filef, nctype
     USE snapfldML, only: &
       xm, ym, u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, pmsl1, pmsl2, &
       hbl1, hbl2, hlayer1, hlayer2, garea, hlevel1, hlevel2, &
       hlayer1, hlayer2, bl1, bl2, enspos, precip, t1_abs, t2_abs, &
-      field1, t1_dew, t2_dew, t2m, spec_humid, xflux, yflux, hflux, &
+      field1, t1_dew, t2_dew, t2m, spec_humid, xflux, yflux, hflux, rel_humid, tv, &
       u_star1, u_star2, w_star1, w_star2, obukhov_l1, obukhov_l2, rho, rhograd, pressures
     USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, ptop, &
                          gparam, klevel, ivlevel, imslp, igtype, ivlayer
@@ -330,11 +330,10 @@ contains
       endif
     end if
 
-!..model boundary layer height
-    call fi_checkload(fio, met_params%blh, '', hbl2(:, :), nt=timepos, nr=nr, nz=1)
-
-!.. Read in 2m dew point
-    call fi_checkload(fio, met_params%dewtemp2m, temp_units, t2_dew(:, :), nt=timepos, nr=nr, nz=1)
+    if (nctype == 'era5') then
+  !..model boundary layer height
+      call fi_checkload(fio, met_params%blh, '', hbl2(:, :), nt=timepos, nr=nr, nz=1)
+    endif
 
 !.. Read in 2m air temperature
     call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
@@ -375,8 +374,8 @@ contains
     endif
 
 !.. Calculate fields required for flexpart diffusion
+    call air_density(rho, rhograd, pressures, tv)
     call diffusion_fields(u_star2, w_star2, obukhov_l2)
-    call air_density(rho, rhograd, pressures)
 
     if (first_time_read) then
       call compute_vertical_coords(alev, blev, ptop)

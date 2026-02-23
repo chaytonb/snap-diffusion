@@ -795,29 +795,14 @@ PROGRAM bsnap
 
           t_local = 0.0
           do while (t_local < tstep)
-            
-            ! if (np==1) then
-            !   write(*,*) 'before turb', pdata(np)%turbvelw, pdata(np)%zmetres, pdata(np)%z, pdata(np)%ptstep
-            ! endif
 
             pdata(np)%ptstep = pdata(np)%tlw * 0.2
             ! Ensure it does not exceed the global timestep window
             pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
 
-            call turbulence_master(blfullmix, pdata(np), pextra)
-
-            ! if (np==1) then
-            !   write(*,*) 'after turb',pdata(np)%turbvelw, pdata(np)%zmetres, pdata(np)%z, pdata(np)%ptstep
-            ! endif
-
             call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
 
-            ! if (np==1) then
-            !   write(*,*) 'before conversion',pdata(np)%turbvelw, pdata(np)%zmetres, pdata(np)%z, pdata(np)%ptstep
-            !   call eta_to_metres(pdata(np), pextra)
-            !   write(*,*) 'after advec',pdata(np)%turbvelw, pdata(np)%zmetres, pdata(np)%z, pdata(np)%ptstep
-            !   call sleep(1)
-            ! endif
+            call turbulence_master(blfullmix, pdata(np), pextra)
 
             call check_in_domain(pdata(np), out_of_domain)
             if (out_of_domain) then
@@ -830,11 +815,14 @@ PROGRAM bsnap
           end do
 
         else
+          pdata(np)%ptstep = tstep
+
           call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
 
           if (use_random_walk) then
             call turbulence_master(blfullmix, pdata(np), pextra)
           endif
+          
           !.. check domain (%active) after moving particle
           call check_in_domain(pdata(np), out_of_domain)
           if (out_of_domain) then

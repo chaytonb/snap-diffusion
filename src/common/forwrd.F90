@@ -90,6 +90,11 @@ subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra)
 #else
   part%x = part%x + dx1*pextra%rmx
   part%y = part%y + dy1*pextra%rmy
+
+  ! if (dz1 > 1 .OR. dz1 < -1) then
+  !   write(*,*) part%z, dz1, part%z + dz1, part%x, part%y
+  ! endif
+
   part%z = part%z + dz1
 #endif
   part%z = min(part%z, dble(vlevel(1)))

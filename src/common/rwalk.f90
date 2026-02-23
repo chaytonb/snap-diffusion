@@ -404,6 +404,8 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
     delz=mod(delz,part%hbl)
   endif
 
+  write(*,*) part%turbvelu, part%turbvelv, part%turbvelw
+
   if (entrainment_scheme=='snap') then
     ! SNAP ENTRAINMENT SCHEME --------------------------------------------------
     part%zmetres = part%zmetres + delz
@@ -505,16 +507,16 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   if (pextra%ol.gt.0.) then
 
     part_stability=1
-    sigu=2.*pextra%ust*(1.-scaled_height) 
+    sigu=2.*ust*(1.-scaled_height) 
     sigu=max(sigu,0.25)
     sigv=sigu
-    sigw=1.3*pextra%ust*(1.-scaled_height)
+    sigw=1.3*ust*(1.-scaled_height)
     sigw=max(sigw,0.1)
 
     ! Lagrangian timescales
     tlu=0.07*(part%hbl/sigv)*(scaled_height)**0.5 
     tlv=tlu
-    tlw=0.1*part%hbl/sigw*(scaled_height)**0.8
+    tlw=0.1*(part%hbl/sigw)*(scaled_height)**0.8
 
     dsigwdz = (-1.3 * ust) / part%hbl
   
@@ -528,7 +530,7 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
     sigw = (1.2 * wst**2  *(1-0.9*scaled_height)*(scaled_height)**0.666 + (1.8 - 1.4*scaled_height)*ust**2)**0.5
     sigw=max(sigw,0.1) 
 
-    eps = (1.5 - 1.2 * (scaled_height)**0.333)*(wst/part%hbl) + (ust**3 * (1-0.8*scaled_height)/(k*part%zmetres))
+    eps = (1.5 - 1.2 * (scaled_height)**0.333)*((wst**3)/part%hbl) + (ust**3 * (1-0.8*scaled_height)/(k*part%zmetres))
     eps = max(1e-4, eps)
 
     tlu = 2*sigu**2 / (c*eps)
@@ -543,9 +545,13 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   if (turb_homogeneous) dsigwdz=0
 
   ! Clamp lagrangian timescales
-  tlu=max(30.,tlu)
-  tlv=max(30.,tlv)
-  tlw=max(10.,tlw)
+  tlu=min(300.,tlu)
+  tlv=min(300.,tlv)
+  tlw=min(100.,tlw)
+
+  tlu=max(20.,tlu)
+  tlv=max(20.,tlv)
+  tlw=max(20.,tlw)
 
   part%tlw = tlw
 
@@ -568,14 +574,13 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   if (nrand+1.gt.max_rands) nrand=1
   ! Calculate turbulent vertical velocity
   part%turbvelw=part%turbvelw*(1-(dttlw)) + (2*sigw**2 * dttlw)**0.5*rands(nrand) & 
-                + part%ptstep/sigw * dsigwdz * (sigw**2 + part%turbvelw**2) 
+                + (part%ptstep/sigw) * dsigwdz * (sigw**2 + part%turbvelw**2) 
   nrand=nrand+1
 
   ! Calculate new vertical position
   delz=part%turbvelw*part%ptstep 
-  if (abs(delz).gt.part%hbl) then
-    delz=mod(delz,part%hbl)
-  endif
+
+  ! write(*,*) sigu, sigv, sigw, tlu, tlv, tlw, part%ptstep, part_stability, wst, ust, scaled_height
 
   ! Reflection and position updates
   if (delz.lt.-part%zmetres) then         ! reflection at ground
@@ -636,18 +641,9 @@ subroutine name_random_walk_profile_above_bl(part, pextra)
 
   ! Calculate new vertical position
   delz=part%turbvelw*part%ptstep  
-  if (abs(delz).gt.part%hbl) then
-    delz=mod(delz,part%hbl)
-  endif
 
-  ! Reflection and position updates
-  if (delz.lt.-part%zmetres) then         ! reflection at ground
-    part%zmetres = -part%zmetres - delz
-  else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
-    part%zmetres = -part%zmetres-delz+2.*part%hbl
-  else                         ! no reflection
-    part%zmetres = part%zmetres+delz
-  endif
+  part%zmetres = part%zmetres + delz
+
 end subroutine name_random_walk_profile_above_bl
 
 subroutine variable_k_name_within_bl(part, pextra) 
@@ -672,7 +668,7 @@ subroutine variable_k_name_within_bl(part, pextra)
   scaled_height = part%zmetres/part%hbl
 
   k = 0.4
-  c = 3 ! constant, values for this disagree. 3 from Sawford
+  c = 2 ! constant, values for this disagree. 3 from Sawford
   wst = pextra%wst
   ust = pextra%ust
   
@@ -716,8 +712,8 @@ subroutine variable_k_name_within_bl(part, pextra)
   ! Calculate Turbulent Velocities, Ryall and Maryon 1998
   if (nrand+3.gt.max_rands) nrand=1
   part%turbvelu = ((2*(sigu**2 * tlu))/tstep)**0.5 * rands(nrand)
-  part%turbvelv = ((2*(sigv**2 * tlv))/tstep)**0.5 * rands(nrand)
-  part%turbvelw = ((2*(sigw**2 * tlw))/tstep)**0.5 * rands(nrand)
+  part%turbvelv = ((2*(sigv**2 * tlv))/tstep)**0.5 * rands(nrand+1)
+  part%turbvelw = ((2*(sigw**2 * tlw))/tstep)**0.5 * rands(nrand+2)
   nrand=nrand+3
 
   ! Calculate new horizontal positions
@@ -787,8 +783,8 @@ subroutine variable_k_name_above_bl(part, pextra)
 
   if (nrand+3.gt.max_rands) nrand=1
   part%turbvelu = ((2*(sigu**2 * tlu))/tstep)**0.5 * rands(nrand)
-  part%turbvelv = ((2*(sigv**2 * tlv))/tstep)**0.5 * rands(nrand)
-  part%turbvelw = ((2*(sigw**2 * tlw))/tstep)**0.5 * rands(nrand)
+  part%turbvelv = ((2*(sigv**2 * tlv))/tstep)**0.5 * rands(nrand+1)
+  part%turbvelw = ((2*(sigw**2 * tlw))/tstep)**0.5 * rands(nrand+2)
   nrand=nrand+3
 
   ! Calculate new horizontal positions
@@ -815,10 +811,9 @@ subroutine constant_k_name_within_bl(part, pextra)
   !> extra information regarding the particle
   type(extraParticle), intent(inout) :: pextra
 
-  integer :: i, j
   real :: delz ! Turbulent vertical displacement (m)
   integer :: hor_diffu=5300
-  real :: top_entrainment=0.05
+  real :: top_entrainment=0.03
   real(real64) :: rnd(3)
   real :: mixing_top
 
@@ -867,19 +862,12 @@ subroutine constant_k_name_above_bl(part, pextra)
 
   delz = part%turbvelw*tstep
 
-  ! Reflection and position updates
-  if (delz.lt.-part%zmetres) then         ! reflection at ground
-    part%zmetres = -part%zmetres - delz
-  else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
-    part%zmetres = -part%zmetres-delz+2.*part%hbl
-  else                         ! no reflection
-    part%zmetres = part%zmetres+delz
-  endif
-
+  part%zmetres = part%zmetres+delz
+  
 end subroutine constant_k_name_above_bl
 
 subroutine diffusion_fields(u_star, w_star, obukhov_length)
-  use snapfldML, only: ps2, t2m, t2_dew, hbl2, xflux, yflux, hflux
+  use snapfldML, only: ps2, t2m, t2_dew, hbl2, xflux, yflux, hflux, tv
   use snapdimML, only: nx, ny
   use, intrinsic :: ieee_arithmetic
 
@@ -891,29 +879,19 @@ subroutine diffusion_fields(u_star, w_star, obukhov_length)
 
   real :: stress(nx, ny)
   real :: rho_a(nx, ny)
-  real :: tv(nx, ny)
   real :: vp(nx, ny)
   real :: w(nx, ny)
   real :: x(nx, ny)
 
-  real :: y(nx, ny), a(nx, ny), c(nx, ny), d(nx, ny)
-
-  ! Tetens Equation, vp is the vapour pressure in Pa
-  vp = 0.61078 * EXP(17.27 * (t2_dew - 273.15) / (t2_dew - 35.85)) * 1000
-
-  ! Mixing ratio, convert ps2 to Pa from hPa
-  w = (0.622 * vp) / ((ps2*100) - vp)
-
-  ! Calculate virtual potential temeperature
-  tv = (t2m * (100000/(ps2*100))**(r/cpa))  * (1 + 0.608 * w)
-
   ! Calculate air density
-  rho_a = (ps2*100)/(r*tv)
+  rho_a = (ps2*100) / (t2m * r)
 
   stress = HYPOT(xflux, yflux)
 
   ! Calculate friction velocity
   u_star = sqrt(stress/(rho_a))
+
+  ! write(*,*) u_star
 
   ! Calculate the obukhov length. Negative sign removed as ECMWF convention is positive for downward flux
   obukhov_length = rho_a * cpa * t2m * (u_star**3)/(k*g*hflux)
@@ -923,7 +901,7 @@ subroutine diffusion_fields(u_star, w_star, obukhov_length)
   if (bl_definition == 'constant') then
     hbl2=600
   endif
-  w_star = ((g*hbl2*-hflux)/(tv*rho_a*cpa))**0.333
+  w_star = ((g*hbl2*-hflux)/(tv(:,:,2)*rho_a*cpa))**0.333
 
   where (ieee_is_nan(w_star))
     w_star = 0.0
@@ -931,7 +909,7 @@ subroutine diffusion_fields(u_star, w_star, obukhov_length)
 
 end subroutine diffusion_fields
 
-subroutine air_density(rho, rhograd, pressures)
+subroutine air_density(rho, rhograd, pressures, tv)
   use snapfldML, only: spec_humid, t2_abs, ps2, hlevel2, t2
   use snapdimML, only: nx, ny, nk
   use snapgrdML, only: alevel, blevel, vlevel, vhalf
@@ -941,8 +919,8 @@ subroutine air_density(rho, rhograd, pressures)
   real, intent(out) :: rho(:, :, :)
   real, intent(out) :: rhograd(:, :, :)
   real, intent(out) :: pressures(:, :, :)
+  real, intent(out) :: tv(:,:,:)
 
-  real :: tv(nx, ny, nk)
   integer :: i, j, k
 
   ! Compute virtual temperature where defined (k >= 2)
@@ -1004,84 +982,104 @@ subroutine air_density(rho, rhograd, pressures)
 
 end subroutine
 
-subroutine eta_to_metres(part,pextra)
+subroutine eta_to_metres(part, pextra)
 
-  USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: hlevel2
-  USE snapgrdML, only: ivlayer, vlevel, alevel, blevel
+  use iso_fortran_env, only: real64
+  use particleML, only: extraParticle, Particle
+  use snapfldML,  only: hlevel2, ps2
+  use snapgrdML,  only: vlevel, alevel, blevel
+  use snapdimML,  only: nk
 
-  integer :: i,j,k, ivlvl
-  real :: weight, below_layer, above_layer
+  implicit none
 
-  !> particle with information
-  type(Particle), intent(inout)  :: part
-  !> extra information regarding the particle (u, v, rmx, rmy)
+  type(Particle),      intent(inout) :: part
   type(extraParticle), intent(inout) :: pextra
 
-  ! First time step, set to zero
-  ! convert particle height to metres
-  if (part%z.lt.1e-10) then 
-    ivlvl = 10000 ! Particle isp at the surface
-    k = ivlayer(ivlvl) 
+  integer :: i, j, k
+  real(real64) :: eta
+  real(real64) :: z1, z2
+  real(real64) :: p1, p2, px
+  real(real64) :: frac
+
+  i   = part%x
+  j   = part%y
+  eta = part%z
+
+  ! Find vertical layer in eta 
+  do k = 1, nk-1
+    if (eta > vlevel(k+1)) exit
+  end do
+  k = max(1, min(k, nk-1))
+
+  ! Fraction in eta
+  frac = (eta - vlevel(k)) / (vlevel(k+1) - vlevel(k))
+  frac = max(0.0_real64, min(1.0_real64, frac))
+
+  ! Heights
+  z1 = hlevel2(i,j,k)
+  z2 = hlevel2(i,j,k+1)
+
+  ! Pressures
+  p1 = alevel(k)   + blevel(k)   * ps2(i,j) * 100.0_real64
+  p2 = alevel(k+1) + blevel(k+1) * ps2(i,j) * 100.0_real64
+
+  ! Pressure at particle (linear in frac)
+  px = p1 * (1.0_real64 - frac) + p2 * frac
+
+  ! Log-pressure height interpolation
+  if (p1 > 0.0_real64 .and. p2 > 0.0_real64) then
+    part%zmetres = z1 + (z2 - z1) / log(p2/p1) * log(px/p1)
   else
-    ivlvl = part%z*10000.
-    k = ivlayer(ivlvl) ! Layer below particle
-  endif
-
-  ! Find interpolation weight
-  weight = (part%z - vlevel(k)) / (vlevel(k+1) - vlevel(k))
-  
-  ! Get particle position
-  i = part%x
-  j = part%y
-
-  below_layer = hlevel2(i, j, k) ! Height level below particle
-  above_layer = hlevel2(i, j, k+1) ! Height level above particle
-
-  part%zmetres = below_layer + weight * (above_layer - below_layer)
+    part%zmetres = z1 * (1.0_real64 - frac) + z2 * frac
+  end if
 
 end subroutine eta_to_metres
 
-subroutine metres_to_eta(part,pextra)
+subroutine metres_to_eta(part, pextra)
 
-  USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: hlevel2, ps2
-  USE snapgrdML, only: alevel, blevel
-  USE snapdimML, only: nk
+  use iso_fortran_env, only: real64
+  use particleML, only: extraParticle, Particle
+  use snapfldML,  only: hlevel2, ps2
+  use snapgrdML,  only: vlevel, alevel, blevel
+  use snapdimML,  only: nk
 
-  integer :: i,j,k, below_index, above_index
-  real :: weight, pressure_below, pressure_above, particle_pressure, height_k
+  implicit none
 
-  !> particle with information
-  type(Particle), intent(inout)  :: part
-  !> extra information regarding the particle (u, v, rmx, rmy)
+  type(Particle),      intent(inout) :: part
   type(extraParticle), intent(inout) :: pextra
 
+  integer :: i, j, k
+  real(real64) :: z
+  real(real64) :: z1, z2
+  real(real64) :: p1, p2, px
+  real(real64) :: frac
+
   i = part%x
-  j = part%y  
+  j = part%y
+  z = part%zmetres
 
-  above_index = nk
-  do k = 2, nk
-    height_k = hlevel2(i, j, k)
-    if (part%zmetres < height_k) then
-        above_index = k
-        exit  
-    end if
+  do k = 1, nk-1
+    if (z < hlevel2(i,j,k+1)) exit
   end do
+  k = max(1, min(k, nk-1))
 
-  below_index = above_index - 1
+  z1 = hlevel2(i,j,k)
+  z2 = hlevel2(i,j,k+1)
 
-  pressure_below = alevel(below_index) + blevel(below_index) * ps2(i,j)
-  pressure_above = alevel(above_index) + blevel(above_index) * ps2(i,j) 
+  p1 = alevel(k)   + blevel(k)   * ps2(i,j) * 100.0_real64
+  p2 = alevel(k+1) + blevel(k+1) * ps2(i,j) * 100.0_real64
 
-  weight = (part%zmetres - hlevel2(i, j, below_index)) /  &
-  (hlevel2(i, j, above_index) - hlevel2(i, j, below_index))
+  if (p1 > 0.0_real64 .and. p2 > 0.0_real64) then
+    px = p1 * exp( log(p2/p1) * (z - z1) / (z2 - z1) )
+    frac = (px - p1) / (p2 - p1)
+  else
+    frac = (z - z1) / (z2 - z1)
+  end if
 
-  particle_pressure = pressure_below + weight * (pressure_above - pressure_below)
+  frac = max(0.0_real64, min(1.0_real64, frac))
 
-  part%z = particle_pressure / ps2(i, j)
-
-  part%z = min(part%z, 1.0d0) ! set minimum height
+  part%z = vlevel(k) * (1.0_real64 - frac) + vlevel(k+1) * frac
+  part%z = max(0.0_real64, min(1.0_real64, part%z))
 
 end subroutine metres_to_eta
 

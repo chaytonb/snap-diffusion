@@ -54,6 +54,7 @@ module snapmetML
     character(len=80) :: meanxsurfstress = ''
     character(len=80) :: meanysurfstress = ''
     character(len=80) :: spec_humid = ''
+    character(len=80) :: rel_humid = ''
 
     character(len=80) :: t2m = ''
     character(len=80) :: yflux = ''
@@ -235,6 +236,34 @@ module snapmetML
       met_params%mass_fraction_cloud_ice_in_air = "mass_fraction_of_cloud_ice_in_air_ml"
 
       met_params%cloud_fraction = "cloud_area_fraction_in_atmosphere_layer_ml"
+
+    case('cerra')
+      met_params%manual_level_selection = .true.
+      met_params%has_dummy_dim = .false.
+      met_params%xwindv = 'x_wind_ml'
+      met_params%ywindv = 'y_wind_ml'
+!       !! real temperature, convert to pot-temp later
+      met_params%pottempv = 'air_temperature_ml'
+      met_params%temp_is_abs = .true.
+      met_params%sigmav = ''
+      met_params%ptopv = ''
+      met_params%apv = 'ap'
+      met_params%bv = 'b'
+      met_params%sigmadotv = '' 
+      met_params%sigmadot_is_omega = .false.
+      met_params%psv = 'surface_air_pressure'
+      met_params%precaccumv = ''
+      met_params%precconvrt = ''
+      met_params%precstratiaccumv = ''
+      met_params%precconaccumv = ''
+      met_params%hflux = 'sshf'
+      met_params%xflux = 'tisemf'
+      met_params%yflux = 'tisnmf'
+      met_params%rel_humid = 'relative_humidity_2m'
+      met_params%t2m = 'air_temperature_2m'
+      met_params%spec_humid = 'specific_humidity_ml'
+
+      
 !..get grid parameters from field identification
     case('arome')
       met_params%manual_level_selection = .true.

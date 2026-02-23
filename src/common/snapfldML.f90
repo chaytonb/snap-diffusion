@@ -51,6 +51,9 @@ module snapfldML
 !> 2m dew point temperature
   real(kind=real32), allocatable, save, public :: t2_dew(:,:)
 
+!> 2m relative humidity
+  real(kind=real32), allocatable, save, public :: rel_humid(:,:)
+
   real(kind=real32), allocatable, save, public :: hlevel1(:,:,:)
   real(kind=real32), allocatable, save, public :: hlevel2(:,:,:)
   real(kind=real32), allocatable, save, public :: hlayer1(:,:,:)
@@ -76,6 +79,9 @@ module snapfldML
 
 !> pressure values
   real(kind=real32), allocatable, save, public :: pressures(:,:,:)
+
+!> virtual temperature
+  real(kind=real32), allocatable, save, public :: tv(:,:,:)
 
 !> MO length (diffusion)
   real(kind=real32), allocatable, save, public :: obukhov_l1(:,:)

@@ -115,6 +115,8 @@ subroutine edcomp(nx,ny,nz,u,v,edot,ps,xmd2h,ymd2h, &
     ahalf,bhalf,vhalf, &
     uu,vv,dpsdt,edoth)
 
+  USE snapgrdML, only: alevel, blevel, vlevel
+
   integer :: nx,ny,nz
   real ::    u(nx,ny,nz),v(nx,ny,nz),edot(nx,ny,nz)
   real ::    ps(nx,ny),xmd2h(nx,ny),ymd2h(nx,ny)
@@ -162,11 +164,23 @@ subroutine edcomp(nx,ny,nz,u,v,edot,ps,xmd2h,ymd2h, &
     db = bhalf(k) - bhalf(k+1)
     deta = vhalf(k) - vhalf(k+1)
 
+    ! write(*,*) 'alevel', alevel
+    ! write(*,*) 'blevel', blevel
+    ! write(*,*) 'vlevel', vlevel
+    ! write(*,*) 'ahalf', ahalf
+    ! write(*,*) 'bhalf', bhalf
+    ! write(*,*) 'vhalf', vhalf
+    ! error stop
+
     do j=1,ny
       do i=1,nx
         dp = da + db*ps(i,j)
         uu(i,j) = dp*u(i,j,k)
         vv(i,j) = dp*v(i,j,k)
+        ! if (i==412 .AND. j==505) then
+        !   write(*,*) uu(i,j), vv(i,j), dp, da
+        !   error stop
+        ! endif
       end do
     end do
 
@@ -186,11 +200,21 @@ subroutine edcomp(nx,ny,nz,u,v,edot,ps,xmd2h,ymd2h, &
         etadot = etadot*deta/dp
       !..and then mean with the input value
         edot(i,j,k) = (edot(i,j,k) + etadot)*0.5
+        ! if (i==412 .AND. j==505) then
+        !   write(*,*) etadot, edot(i,j,k), dp, div, k
+        ! endif
       end do
     end do
 
   !.......end do k=nz,2,-1
   end do
+
+  ! write(*,*) 'etadot', edot(412,505,:)
+  ! write(*,*) 'u velocity', u(412,505,:)
+  ! write(*,*) 'v velocity', v(412,505,:)
+  ! write(*,*) 'surface pressure', ps(412,505)
+  ! error stop
+
 
 !..etadot in upper full level
   da = ahalf(nz) - ahalf(nz+1)

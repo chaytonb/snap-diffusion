@@ -32,7 +32,7 @@ module allocateFieldsML
       roa, ustar, monin_l, raero, vs, rs, &
       total_activity_released, total_activity_lost_domain, total_activity_lost_other, &
       wscav, cloud_cover, t1_dew, t2_dew, spec_humid, obukhov_l1, obukhov_l2,  & 
-      u_star1, u_star2, w_star1, w_star2, rho, rhograd, pressures
+      u_star1, u_star2, w_star1, w_star2, rho, rhograd, pressures, rel_humid, tv
   USE snapfilML, only: idata, fdata
   USE snapgrdML, only: ahalf, bhalf, vhalf, alevel, blevel, vlevel, imodlevel, &
       compute_column_max_conc, compute_aircraft_doserate, aircraft_doserate_threshold
@@ -156,6 +156,8 @@ subroutine allocateFields
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( hflux(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( rel_humid(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( t2m(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( spec_humid(nx,ny,nk), STAT = AllocateStatus)
@@ -177,6 +179,8 @@ subroutine allocateFields
   ALLOCATE ( rhograd(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( pressures(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( tv(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
 
   ALLOCATE ( pmsl1(nx,ny), STAT = AllocateStatus)
