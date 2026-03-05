@@ -177,7 +177,7 @@ PROGRAM bsnap
   USE snapgrdML, only: modleveldump, &
                        klevel, imslp, itotcomp, gparam, &
                        igtype, imodlevel, modlevel_is_average, precipitation_in_output, &
-                       ivlayer, vlevel, alevel, blevel
+                       alevel, blevel
   USE snaptabML, only: tabcon
   USE particleML, only: pdata, extraParticle
   USE allocateFieldsML, only: allocateFields, deallocateFields
@@ -187,7 +187,7 @@ PROGRAM bsnap
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
   USE rwalkML, only: rwalk_init, diffusion_scheme, bl_definition, record_stats, &
-                      num_neutral, num_stable, num_unstable, turbulence_master, eta_to_metres
+                     turbulence_master, eta_to_metres
   USE milibML, only: xyconvert
   use snapfldML, only: total_activity_lost_domain
   USE forwrdML, only: forwrd, forwrd_init
@@ -265,22 +265,19 @@ PROGRAM bsnap
   integer :: date_time(8)
   logical :: warning = .false.
   integer :: npartmax
-  real :: dt_part
   real :: t_local
   !> tstep: timestep in seconds
   real :: tstep = 900
   logical :: adaptive_timesteps = .false.
   real :: rmlimit = -1.0, rnhrel, tf1, tf2, tnow, tnext
   real ::    x(1), y(1)
-  real :: weight, above_layer, below_layer,j, pressure_above, pressure_below, blmax_pressure
-  integer:: ivlvl, above_index, below_index, height_k
+  real :: weight, j, pressure_above, pressure_below
+  integer:: above_index, below_index, height_k
   type(extraParticle) :: pextra
   real ::    rscale
   integer :: ntprof
   type(duration_t) :: dur
   logical :: out_of_domain
-  integer :: above_tbl_before_adv, above_tbl_after_adv
-  integer :: above_tbl_before_diffu, above_tbl_after_diffu
 
   real :: mhmin, mhmax  ! minimum and maximum of mixing height
 !> Information for reading from a releasefile
@@ -796,7 +793,14 @@ PROGRAM bsnap
           t_local = 0.0
           do while (t_local < tstep)
 
+            ! Interpolate
+            if (t_local /= 0) then
+              call posint(pdata(np), tf1, tf2, tnow+t_local, pextra)
+            endif
+
+            ! Enforce timesteps 1/5 of the vertical lagrangian timescale
             pdata(np)%ptstep = pdata(np)%tlw * 0.2
+            
             ! Ensure it does not exceed the global timestep window
             pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
 
@@ -833,7 +837,6 @@ PROGRAM bsnap
         endif
 
       end do part_do
-      ! write(*,*) num_unstable, num_neutral, num_stable
       !$OMP END PARALLEL DO
       call particleloop_timer%stop_and_log()
 
