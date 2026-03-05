@@ -37,19 +37,19 @@ compilation
  * NetCDF (netcdf > 4.1.1)
  * NetCDF-fortran
  * Python3 (optional)
- * git (optional)
  * fimex (optional)
+
+To work with this repository, please have `git-lfs` installed. In addition `pre-commit` is used
+when git-commiting for `ruff` python-code linting and formatting.
 
 
 ## Installation
 
-Create a file `current.mk` in the `src` directory. Use e.g the file
-[ubuntuXenial.mk](src/ubuntuXenial.mk)
-as a template. The most important parameters to modify are NCDIR and
-BINDIR, where the final files will be installed to.
-THE MIINC and MILIB should be uncommented.
+Create a file `current.mk` in the `src` directory. Use for example the file
+[gcc_pkgconfig.mk](src/gcc_pkgconfig.mk)
+as a template. The most important parameter to modify is `BINDIR`, but `FIMEXLIB` and `NETCDFLIB` might also have to be modified depending on your development setup.
 
-In the `src` directory run then:
+In the `src` directory run:
 
 ```sh
 make install
@@ -66,7 +66,7 @@ Examples of `snap.input` can be found in the directory [src/naccident/examples/]
 
 ### Versioning
 
-The master branch in git is used for development. Stable versions are tagged as 'vX.YY.ZZ'. Releases should also have a DOI for citation, see https://doi.org/10.5281/zenodo.1155159 . For the user-interface snappy, we use tags like 'snappy-vX.YY.ZZ' with independent version numbers. Other tags are used internally.
+The main branch in git is used for development. Stable versions are tagged as 'vX.YY.ZZ'. Releases should also have a DOI for citation, see https://doi.org/10.5281/zenodo.1155159 . For the user-interface snappy, we use tags like 'snappy-vX.YY.ZZ' with independent version numbers. Other tags are used internally.
 
 
 The build system uses automatic versioning based on git tags and revision numbers and embeds this into the resulting program. If git or python3 is unavailable, this logic should be bypassed by setting the environment variable VERSION to some value, e.g.

@@ -82,6 +82,7 @@ module fldout_ncML
     integer :: aircraft_doserate_threshold_height
     integer :: components
     type(component_var) :: comp(mcomp)
+    integer :: surface_stress = -1
     integer :: xflux = -1
     integer :: yflux = -1
     integer :: hflux = -1
@@ -161,6 +162,7 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, &
   integer :: ipos(3), isize(3)
   integer, save :: ihrs, ihrs_pos
 
+  character(len=1024) :: fmt
   integer :: nptot1,nptot2
   real(real64) :: bqtot1,bqtot2
 
@@ -317,14 +319,13 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, &
         values=field_hr3), "output_column")
     endif
 
-  !..instant part of Bq in boundary layer
+  !..instant part of Bq in boundary layer, field_hr3 needed later
     scale = 100.
     where (field_hr1 + field_hr2 > 0.0)
       field_hr3 = scale*field_hr1 / (field_hr1 + field_hr2)
     elsewhere
       field_hr3 = undef
     endwhere
-    if(idebug == 1) call ftest('pbq', field_hr3, contains_undef=.true.)
 
   !..instant concentration in boundary layer
     field_hr2(:,:) = cscale*field_hr1 / (hbl_hr*garea)
@@ -400,10 +401,10 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, &
       end block
     endif
 
-  !..instant part of Bq in boundary layer
-    if(idebug == 1) call ftest('pbq', field_hr3, contains_undef=.true.)
+  !..instant part of Bq in boundary layer, in percent of total
+    if(idebug == 1) call ftest('pbq%', field_hr3, contains_undef=.true.)
 
-  !..average part of Bq in boundary layer
+  !..average part of Bq in boundary layer, in percent of total
     scale=100.
 
     do j=1,ny
@@ -415,7 +416,7 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, &
         endif
       end do
     end do
-    if(idebug == 1) call ftest('apbq', field_hr3, contains_undef=.true.)
+    if(idebug == 1) call ftest('apbq%', field_hr3, contains_undef=.true.)
 
   !..instant concentration in surface layer
     field_hr3(:,:) = concen(:,:,m)
@@ -430,33 +431,37 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, &
     call check(nf90_put_var(iunit, varid%comp(m)%ac, start=ipos, count=isize, &
         values=field_hr3), "set_ac(m)")
 
-    write(iulog,*) '   Bq,particles in    abl  : ',bqtot1,nptot1
-    write(iulog,*) '   Bq,particles above abl  : ',bqtot2,nptot2
-    write(iulog,*) '   Bq,particles            : ',bqtot1+bqtot2, &
+    fmt="(a,1x,es10.3e2,1x,i0)"
+    write(iulog,fmt=fmt) '   Bq,particles in    abl  : ',bqtot1,nptot1
+    write(iulog,fmt=fmt) '   Bq,particles above abl  : ',bqtot2,nptot2
+    write(iulog,fmt=fmt) '   Bq,particles            : ',bqtot1+bqtot2, &
         nptot1+nptot2
-    write(iulog,*) '   Bq,particles added      : ', total_activity_released(m)
-    write(iulog,*) '   Bq,particles (domain)   : ', total_activity_lost_domain(m)
-    write(iulog,*) '   Bq,particles lost (misc): ', total_activity_lost_other(m)
+    fmt="(a,1x,es10.3e2)"
+    write(iulog,fmt=fmt) '   Bq added      : ', total_activity_released(m)
+    write(iulog,fmt=fmt) '   Bq (domain)   : ', total_activity_lost_domain(m)
+    write(iulog,fmt=fmt) '   Bq lost (misc): ', total_activity_lost_other(m)
     if (output_component(m)%has_drydep) then
-    write(iulog,*) '   Bq,particles dry dep    : ', sum(accdry(:,:,m))
+    write(iulog,fmt=fmt) '   Bq dry dep    : ', sum(accdry(:,:,m))
     endif
     if (output_component(m)%has_wetdep) then
-    write(iulog,*) '   Bq,particles wet dep    : ', sum(accwet(:,:,m))
+    write(iulog,fmt=fmt) '   Bq wet dep    : ', sum(accwet(:,:,m))
     endif
     if (allocated(massbalance_file)) then
+      fmt="(a,1x,es10.3e2,1x,i0)"
       write(massbalance_file,*) ' component: ', output_component(m)%name
-      write(massbalance_file,*) '   Bq,particles in    abl  : ',bqtot1,nptot1
-      write(massbalance_file,*) '   Bq,particles above abl  : ',bqtot2,nptot2
-      write(massbalance_file,*) '   Bq,particles            : ',bqtot1+bqtot2, &
+      write(massbalance_file,fmt=fmt) '   Bq,particles in    abl  : ',bqtot1,nptot1
+      write(massbalance_file,fmt=fmt) '   Bq,particles above abl  : ',bqtot2,nptot2
+      write(massbalance_file,fmt=fmt) '   Bq,particles            : ',bqtot1+bqtot2, &
           nptot1+nptot2
-      write(massbalance_file,*) '   Bq,particles added      : ', total_activity_released(m)
-      write(massbalance_file,*) '   Bq,particles (domain)   : ', total_activity_lost_domain(m)
-      write(massbalance_file,*) '   Bq,particles lost (misc): ', total_activity_lost_other(m)
+      fmt="(a,1x,es10.3e2)"
+      write(massbalance_file,fmt=fmt) '   Bq,particles added      : ', total_activity_released(m)
+      write(massbalance_file,fmt=fmt) '   Bq,particles (domain)   : ', total_activity_lost_domain(m)
+      write(massbalance_file,fmt=fmt) '   Bq,particles lost (misc): ', total_activity_lost_other(m)
       if (output_component(m)%has_drydep) then
-      write(massbalance_file,*) '   Bq,particles dry dep    : ', sum(accdry(:,:,m))
+      write(massbalance_file,fmt=fmt) '   Bq,particles dry dep    : ', sum(accdry(:,:,m))
       endif
       if (output_component(m)%has_wetdep) then
-      write(massbalance_file,*) '   Bq,particles wet dep    : ', sum(accwet(:,:,m))
+      write(massbalance_file,fmt=fmt) '   Bq,particles wet dep    : ', sum(accwet(:,:,m))
       endif
     endif
 
@@ -593,34 +598,22 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, &
 
   if (output_vd_debug) then
     block
-      use snapfldml, only: t2m, xflux, yflux, z0, hflux, leaf_area_index, &
-        roa, ustar, monin_l, raero, vs, rs, ps2
+      use snapfldml, only: t2m, surface_stress, z0, hflux, &
+        ustar, raero, ps2
       call hres_field(ps2, field_hr1)
       call check(nf90_put_var(iunit, varid%ps_vd, start=ipos, count=isize, values=field_hr1))
       call hres_field(t2m, field_hr1)
       call check(nf90_put_var(iunit, varid%t2m, start=ipos, count=isize, values=field_hr1))
-      call hres_field(xflux, field_hr1)
-      call check(nf90_put_var(iunit, varid%xflux, start=ipos, count=isize, values=field_hr1))
-      call hres_field(yflux, field_hr1)
-      call check(nf90_put_var(iunit, varid%yflux, start=ipos, count=isize, values=field_hr1))
+      call hres_field(surface_stress, field_hr1)
+      call check(nf90_put_var(iunit, varid%surface_stress, start=ipos, count=isize, values=field_hr1))
       call hres_field(z0, field_hr1)
       call check(nf90_put_var(iunit, varid%z0, start=ipos, count=isize, values=field_hr1))
       call hres_field(hflux, field_hr1)
       call check(nf90_put_var(iunit, varid%hflux, start=ipos, count=isize, values=field_hr1))
-      call hres_field(leaf_area_index, field_hr1)
-      call check(nf90_put_var(iunit, varid%lai, start=ipos, count=isize, values=field_hr1))
-      call hres_field(roa, field_hr1)
-      call check(nf90_put_var(iunit, varid%roa, start=ipos, count=isize, values=field_hr1))
       call hres_field(ustar, field_hr1)
       call check(nf90_put_var(iunit, varid%ustar, start=ipos, count=isize, values=field_hr1))
-      call hres_field(monin_l, field_hr1)
-      call check(nf90_put_var(iunit, varid%monin_l, start=ipos, count=isize, values=field_hr1))
       call hres_field(raero, field_hr1)
       call check(nf90_put_var(iunit, varid%raero, start=ipos, count=isize, values=field_hr1))
-      call hres_field(vs, field_hr1)
-      call check(nf90_put_var(iunit, varid%vs, start=ipos, count=isize, values=field_hr1))
-      call hres_field(rs, field_hr1)
-      call check(nf90_put_var(iunit, varid%rs, start=ipos, count=isize, values=field_hr1))
     end block
   endif
 
@@ -769,8 +762,8 @@ subroutine nc_declare(iunit, dimids, varid, varname, units, stdname, chunksize, 
 
   integer :: datatype_internal
 
-  write(iulog,"('declaring ' (a) ' ' (a) )",advance="NO") varname, units
-  if (present(stdname)) write(iulog, "(' ' (a))",advance="NO") trim(stdname)
+  write(iulog,"('declaring ', (a), ' ', (a))",advance="NO") varname, units
+  if (present(stdname)) write(iulog, "(' ', (a))",advance="NO") trim(stdname)
   write(iulog,'()',advance="YES")
 
   if (present(datatype)) then
@@ -826,6 +819,7 @@ subroutine nc_set_projection(iunit, xdimid, ydimid, &
     simulation_start)
   USE snapdimML, only : nx, ny, output_resolution_factor, hres_field
   USE snapfldML, only : field_hr1, field_hr2
+  USE milibML, only : EARTH_RADIUS
   INTEGER, INTENT(IN) :: iunit, xdimid, ydimid, igtype
   REAL(real32), INTENT(IN):: gparam(8)
   REAL(real32), INTENT(IN), DIMENSION(nx*output_resolution_factor,ny*output_resolution_factor) :: garea
@@ -858,6 +852,10 @@ subroutine nc_set_projection(iunit, xdimid, ydimid, &
 ! a reference-time, same as in WRF
   call check(nf90_put_att(iunit, NF90_GLOBAL, &
       "SIMULATION_START_DATE", trim(simulation_start)))
+
+
+! datum and projection
+  call check(nf90_put_att(iunit,proj_varid, "earth_radius", EARTH_RADIUS))
 
   gparam_hres(:) = gparam(:)
   select case(igtype)
@@ -971,11 +969,6 @@ subroutine nc_set_projection(iunit, xdimid, ydimid, &
 
     xvals(1) = (xvals(1)-1)*gparam(7)
     yvals(1) = (yvals(1)-1)*gparam(8)
-    ! xvals is currently the lowerd left corner in plane-coordinates
-    ! but must be in m from center
-    ! first cell center, not left edge. must be moved
-    xvals(1) = xvals(1) - .5 * (output_resolution_factor-1) * gparam_hres(7)
-    yvals(2) = yvals(2) - .5 * (output_resolution_factor-1) * gparam_hres(8)
 
     do i=2,nx*output_resolution_factor
       xvals(i) = xvals(1) + (i-1)*gparam_hres(7)
@@ -992,18 +985,20 @@ subroutine nc_set_projection(iunit, xdimid, ydimid, &
   call check(nf90_put_var(iunit, y_varid, yvals))
   call check(nf90_sync(iunit))
 
-  call check(nf90_def_var(iunit, "longitude", &
-      NF90_FLOAT, dimids, lon_varid))
-  call check(NF90_DEF_VAR_DEFLATE(iunit, lon_varid, 1,1,1))
-  call check(nf90_sync(iunit))
-  call check(nf90_def_var(iunit, "latitude", &
-      NF90_FLOAT, dimids, lat_varid))
-  call check(nf90_sync(iunit))
-  call check(nf90_put_att(iunit,lon_varid, "units", &
-      TRIM("degrees_east")))
-  call check(nf90_put_att(iunit,lat_varid, "units", &
-      TRIM("degrees_north")))
-
+  if (output_resolution_factor == 1) then
+    ! hires lon-lats might be slightly wrong due to interpolation to hires,
+    ! so not outputting them in that case
+    call check(nf90_def_var(iunit, "longitude", &
+        NF90_FLOAT, dimids, lon_varid))
+    call check(NF90_DEF_VAR_DEFLATE(iunit, lon_varid, 1,1,1))
+    call check(nf90_sync(iunit))
+    call check(nf90_def_var(iunit, "latitude", &
+        NF90_FLOAT, dimids, lat_varid))
+    call check(nf90_put_att(iunit,lon_varid, "units", &
+        TRIM("degrees_east")))
+    call check(nf90_put_att(iunit,lat_varid, "units", &
+        TRIM("degrees_north")))
+  endif
   call check(nf90_sync(iunit))
 
 !.... create latitude/longitude variable-values
@@ -1034,8 +1029,11 @@ subroutine nc_set_projection(iunit, xdimid, ydimid, &
     call hres_field(lon, field_hr1, .true.)
     call hres_field(lat, field_hr2, .true.)
   endif
-  call check(nf90_put_var(iunit, lon_varid, field_hr1))
-  call check(nf90_put_var(iunit, lat_varid, field_hr2))
+  if (output_resolution_factor == 1) then
+    ! hires lon-lats might be slightly wrong due to interpolation, so not outputting them in this case
+    call check(nf90_put_var(iunit, lon_varid, field_hr1))
+    call check(nf90_put_var(iunit, lat_varid, field_hr2))
+  end if
 
 !.... create cell_area
   call check(nf90_def_var(iunit, "cell_area", &
@@ -1055,8 +1053,11 @@ subroutine nc_set_projection(iunit, xdimid, ydimid, &
   call check(nf90_put_att(iunit,mapx_varid, "units", "1"))
   call check(nf90_put_att(iunit,mapx_varid, "grid_mapping", &
       TRIM("projection")))
-  call check(nf90_put_att(iunit,mapx_varid, "coordinates", &
-      TRIM("longitude latitude")))
+
+  if (output_resolution_factor == 1) then
+    call check(nf90_put_att(iunit,mapx_varid, "coordinates", &
+        TRIM("longitude latitude")))
+  end if
 
   call hres_field(xm, field_hr1, .true.)
   call check(nf90_put_var(iunit, mapx_varid, field_hr1))
@@ -1066,8 +1067,10 @@ subroutine nc_set_projection(iunit, xdimid, ydimid, &
   call check(nf90_put_att(iunit,mapy_varid, "units", "1"))
   call check(nf90_put_att(iunit,mapy_varid, "grid_mapping", &
       TRIM("projection")))
-  call check(nf90_put_att(iunit,mapy_varid, "coordinates", &
-      TRIM("longitude latitude")))
+  if (output_resolution_factor == 1) then
+    call check(nf90_put_att(iunit,mapy_varid, "coordinates", &
+        TRIM("longitude latitude")))
+  end if
 
   call hres_field(ym, field_hr1, .true.)
   call check(nf90_put_var(iunit, mapy_varid, field_hr1))
@@ -1211,12 +1214,9 @@ subroutine initialize_output(filename, itime, ierror)
     if (output_vd_debug) then
       block
         use snapmetml, only: downward_momentum_flux_units, surface_heat_flux_units, &
-          leaf_area_index_units, surface_roughness_length_units, temp_units
-      call nc_declare(iunit, dimids3d, varid%xflux, &
-        "xflux", units=downward_momentum_flux_units, &
-        chunksize=chksz3d)
-      call nc_declare(iunit, dimids3d, varid%yflux, &
-        "yflux", units=downward_momentum_flux_units, &
+          surface_roughness_length_units, temp_units
+      call nc_declare(iunit, dimids3d, varid%surface_stress, &
+        "surface_stress", units=downward_momentum_flux_units, &
         chunksize=chksz3d)
       call nc_declare(iunit, dimids3d, varid%hflux, &
         "hflux", units=surface_heat_flux_units, &
@@ -1224,24 +1224,13 @@ subroutine initialize_output(filename, itime, ierror)
       call nc_declare(iunit, dimids3d, varid%z0, &
         "z0", units=surface_roughness_length_units, &
         chunksize=chksz3d)
-      call nc_declare(iunit, dimids3d, varid%lai, &
-        "lai", units=leaf_area_index_units, &
-        chunksize=chksz3d)
       call nc_declare(iunit, dimids3d, varid%t2m, &
         "t2m", units=temp_units, &
         chunksize=chksz3d)
-      call nc_declare(iunit, dimids3d, varid%roa, &
-        "roa", units="??", chunksize=chksz3d)
       call nc_declare(iunit, dimids3d, varid%ustar, &
         "ustar", units="??", chunksize=chksz3d)
-      call nc_declare(iunit, dimids3d, varid%monin_l, &
-        "monin_l", units="??", chunksize=chksz3d)
       call nc_declare(iunit, dimids3d, varid%raero, &
         "raero", units="??", chunksize=chksz3d)
-      call nc_declare(iunit, dimids3d, varid%vs, &
-        "vs", units="??", chunksize=chksz3d)
-      call nc_declare(iunit, dimids3d, varid%rs, &
-        "rs", units="??", chunksize=chksz3d)
       call nc_declare(iunit, dimids3d, varid%ps_vd, &
         "ps_vd", units="hPa", chunksize=chksz3d)
       end block
@@ -1251,7 +1240,7 @@ subroutine initialize_output(filename, itime, ierror)
       use iso_fortran_env, only: int8
       use drydepml, only: largest_landfraction_file, classnr
       integer(kind=int8), allocatable :: classnr_hr(:,:)
-      if (largest_landfraction_file /= "not set" .and. output_vd_debug .and. allocated(classnr_hr)) then
+      if (largest_landfraction_file /= "not set" .and. output_vd_debug) then
           call nc_declare(iunit, dimids2d, varid%landfraction, &
             "largest_land_fraction", units="1", datatype=NF90_BYTE)
           call hres_field(classnr, classnr_hr)
@@ -1438,10 +1427,7 @@ subroutine get_varids(iunit, varid, ierror)
   if (ierror /= NF90_NOERR .and. .not. ierror == NF90_ENOTVAR) return
   ierror = nf90_inq_varid(iunit, "aircraft_doserate_threshold_height", varid%aircraft_doserate_threshold_height)
   if (ierror /= NF90_NOERR .and. .not. ierror == NF90_ENOTVAR) return
-
-  ierror = nf90_inq_varid(iunit, "xflux", varid%xflux)
-  if (ierror /= NF90_NOERR .and. .not. ierror == NF90_ENOTVAR) return
-  ierror = nf90_inq_varid(iunit, "yflux", varid%yflux)
+  ierror = nf90_inq_varid(iunit, "surface_stress", varid%surface_stress)
   if (ierror /= NF90_NOERR .and. .not. ierror == NF90_ENOTVAR) return
   ierror = nf90_inq_varid(iunit, "hflux", varid%hflux)
   if (ierror /= NF90_NOERR .and. .not. ierror == NF90_ENOTVAR) return

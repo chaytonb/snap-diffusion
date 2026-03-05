@@ -4,20 +4,25 @@ set -e
 
 install_conda_env() {
     conda create --channel conda-forge --prefix "$1" --yes --file /dev/stdin <<EOF
-python=3.10
-cartopy=0.21.1
-fimex=1.9.5
-netcdf4=1.6.3
-matplotlib=3.7.1
-nco=5.1.4
-openssh=9.2p1
-openssl=3.0.8
-pkg-config=0.29.2
-netcdf-fortran=4.6.0
-gfortran=12.2.0
+python=3.12
+cartopy
+scipy
+fimex=2.1
+netcdf4
+matplotlib
+nco
+openssh
+openssl
+netcdf-fortran
+gfortran
+pytest
+pytest-cov
+tox
+pkg-config
+pre_commit
+git-lfs
+
 EOF
-# scipy installed internally (cartopy?) Used for only for smoothing plots, should be
-# added when updating the dependencies
 }
 
 install_bdiana() {
@@ -59,6 +64,7 @@ install_snappy() {
         # Pip install messes up shebang: https://github.com/pypa/setuptools/issues/494
         # pip install ./utils/SnapPy/
         cd utils/SnapPy || exit 2
+        rm -rf build/ Snappy.egg-info/
         python3 setup.py install
     )
 }
@@ -121,6 +127,31 @@ prepend-path    PKG_CONFIG_PATH         \$rootenv/lib/pkgconfig
 EOF
 }
 
+check_git_lfs() {
+    if ! command -v git &> /dev/null; then
+        echo "git could not be found, please install git and git-lfs" >/dev/stderr
+        exit 2
+    fi
+
+    if ! git lfs ls-files &> /dev/null; then
+        echo "git-lfs could not be found, please install git-lfs" >/dev/stderr
+        exit 2
+    fi
+
+    LFS_FILES_COUNT=$(git lfs ls-files | wc -l)
+    if [ "$LFS_FILES_COUNT" -eq 0 ]; then
+        echo "No git-lfs files found, please run 'git lfs pull' in the repository" >/dev/stderr
+        exit 2
+    fi
+
+    git lfs ls-files | while read hash file; do
+        if [ -f "$file" ] && head -n 1 "$file" | grep -q "^version https://git-lfs.github.com"; then
+            echo "Pointer (not fetched): $file"
+            echo "Please run 'git lfs pull' in the repository to fetch git-lfs files" >/dev/stderr
+            exit 2
+        fi
+    done
+}
 
 install_snap() {
     MODULE_VERSION="$1"
@@ -173,7 +204,8 @@ setenv          SNAP_MODULE             \$ModulesCurrentModulefile
 EOF
 }
 
-FIXED_BASEENV=conda202305
+check_git_lfs
+FIXED_BASEENV=conda202601
 case "${1:-help}" in
   install_baseenv)
     install_baseenv "${2:-TEST}" "${3:---no-force}"

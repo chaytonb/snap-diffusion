@@ -1,19 +1,6 @@
 ! SNAP: Servere Nuclear Accident Programme
-! Copyright (C) 1992-2017   Norwegian Meteorological Institute
-
-! This file is part of SNAP. SNAP is free software: you can
-! redistribute it and/or modify it under the terms of the
-! GNU General Public License as published by the
-! Free Software Foundation, either version 3 of the License, or
-! (at your option) any later version.
-
-! This program is distributed in the hope that it will be useful,
-! but WITHOUT ANY WARRANTY; without even the implied warranty of
-! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-! GNU General Public License for more details.
-
-! You should have received a copy of the GNU General Public License
-! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+! Copyright (C) 1992-2021   Norwegian Meteorological Institute
+! License: GNU General Public License v3.0 or later
 
 module readfield_ncML
   USE ftestML, only: ftest
@@ -110,17 +97,17 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
   USE iso_fortran_env, only: error_unit
   USE snapfilML, only: iavail, filef
   USE snapfldML, only: &
-      xm, ym, u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, pmsl1, pmsl2, &
-      hbl1, hbl2, hlayer1, hlayer2, garea, hlevel1, hlevel2, &
-      hlayer1, hlayer2, bl1, bl2, enspos, precip, t2m, &
-      t1_abs, t2_abs, t1_dew, t2_dew, field1
-  USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, ptop, &
-      gparam, klevel, ivlevel, imslp, igtype, ivlayer
-  USE snapmetML, only: met_params, requires_precip_deaccumulation, &
-      pressure_units, xy_wind_units, temp_units
+      xm, ym, u_io, v_io, w_io, t_io, ps_io, pmsl_io, &
+      garea, enspos, precip_io, t_abs_io, t2_abs
+  USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, &
+      gparam, klevel, ivlevel, imslp, igtype, ivlayer, ivcoor
+  USE snapmetML, only: met_params, xy_wind_units, &
+      pressure_units,  temp_units, requires_precip_deaccumulation
   USE snapdimML, only: nx, ny, nk, output_resolution_factor, hres_field, surface_index
+  USE snaptimers, only: metcalc_timer
   USE datetime, only: datetime_t, duration_t
-!> current timestep (always positive), negative istep means reset
+
+  !> current timestep (always positive), negative istep means reset
   integer, intent(in) :: istep
 !> whether meteorology should be read backwards
   logical, intent(in) :: backward
@@ -134,6 +121,7 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
   type(datetime_t), intent(out) :: itimefi
 !> error (output)
   integer, intent(out) :: ierror
+  real, allocatable :: field1(:,:)
 
 ! local variables
   integer, save :: ncid = 0
@@ -144,7 +132,9 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
   integer :: i, k, ilevel, i1, i2
   integer :: nhdiff, nhdiff_precip
   real :: alev(nk), blev(nk), dxgrid, dygrid
-  real :: p, px, p0
+  real :: p, px, ptop
+  real :: ptoptmp(1)
+  real :: dummy_fc(1,1)
   integer :: prev_tstep_same_file
 
   integer :: timepos, timeposm1
@@ -163,21 +153,22 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
   ntav1 = ntav2
   ntav2 = find_index(istep < 0, backward, itimei, ihr1, ihr2)
 
-  if(ntav2 == 0) then
-    write(iulog,*) '*READFIELD* No model level data available'
-    write(error_unit,*) '*READFIELD* No model level data available'
-    ierror=1
-    return
+  if (idebug == 1) then
+    write(iulog, *) 'MODEL LEVEL SEARCH LIST.   ntav2=', ntav2
+    write(iulog, *) 'nx,ny,nk: ', nx, ny, nk
+    write(iulog, *) 'istep: ', istep
+    write(iulog, *) 'itimei(5), ihr1, ihr2:', itimei, ihr1, ihr2
+    if (ntav2 > 0) write(iulog, fmt='(7(1x,i4),1x,i6,2i5)') (iavail(ntav2))
+    flush(iulog)
   end if
 
-
-  if(idebug == 1) then
-    write(iulog,*) 'MODEL LEVEL SEARCH LIST.   ntav2=',ntav2
-    write(iulog,*) 'nx,ny,nk: ',nx,ny,nk
-    write(iulog,*) 'istep: ',istep
-    write(iulog,*) 'itimei(5), ihr1, ihr2:',itimei,ihr1,ihr2
-    write(iulog,fmt='(7(1x,i4),1x,i6,2i5)') (iavail(ntav2))
+  if (ntav2 < 1) then
+    write(iulog, *) '*READFIELD* No model level data available'
+    write(error_unit, *) '*READFIELD* No model level data available'
     flush(iulog)
+    flush(error_unit)
+    ierror = 1
+    return
   end if
 
 ! time between two inputs
@@ -223,41 +214,17 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
       endif
     endif
   endif
+
   itimefi = datetime_t(iavail(ntav2)%aYear, &
                        iavail(ntav2)%aMonth, &
                        iavail(ntav2)%aDay, &
                        iavail(ntav2)%aHour)
   itimefi = itimefi + duration_t(iavail(ntav2)%fcHour)
 
-  if(idebug == 1) then
-    write(iulog,*) 'READING DATA FROM file=',trim(file_name)
-    write(iulog,*) 'READING DATA FROM position=',timepos, ' for ', &
-      itimefi, ', prev. position=',timeposm1,', hours:',nhdiff
-  end if
-
-
-
-
-  if( .TRUE. ) then
-  !..move data from input time step 2 to 1
-
-    u1(:,:,:) = u2
-    v1(:,:,:) = v2
-    w1(:,:,:) = w2
-    t1(:,:,:) = t2
-    if (allocated(t2_abs)) t1_abs(:,:,:) = t2_abs
-    hlevel1(:,:,:) = hlevel2
-    hlayer1(:,:,:) = hlayer2
-
-    ps1(:,:) = ps2
-    bl1(:,:) = bl2
-    hbl1(:,:) = hbl2
-    t1_dew(:,:) = t2_dew
-
-    if(imslp /= 0) then
-      pmsl1(:,:) = pmsl2
-    end if
-
+    if (idebug == 1) then
+      write (iulog, *) 'READING DATA FROM file=', trim(file_name)
+      write (iulog, *) 'READING DATA FROM position=', timepos, ' for ', &
+        itimefi, ', prev. position=', timeposm1, ', hours:', nhdiff
   end if
 
   if (met_params%ptopv /= '') then
@@ -283,30 +250,37 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
 
   !..u
   !     Get the varid of the data variable, based on its name.
-    call nfcheckload(ncid, met_params%xwindv, start4d, count4d, u2(:,:,k), units=xy_wind_units)
+    call nfcheckload(ncid, met_params%xwindv, start4d, count4d, u_io(:, :, k), units=xy_wind_units)
 
   !..v
-    call nfcheckload(ncid, met_params%ywindv, start4d, count4d, v2(:,:,k), units=xy_wind_units)
+    call nfcheckload(ncid, met_params%ywindv, start4d, count4d, v_io(:, :, k), units=xy_wind_units)
   ! bug in chernobyl borders from destaggering
-    where (v2 >= 1e+30)
-      v2 = 0.0
+    where (v_io >= 1e+30)
+      v_io = 0.0
     end where
 
   !..pot.temp. or abs.temp.
-    call nfcheckload(ncid, met_params%pottempv, start4d, count4d, t2(:,:,k), units=temp_units)
+    call nfcheckload(ncid, met_params%pottempv, start4d, count4d, t_io(:, :, k), units=temp_units)
 
-    if (met_params%apv /= '') then
-      if (met_params%p0 /= '') then
-        call nfcheckload(ncid, met_params%apv, [ilevel], [1], alev(k:k), units="1")
-        alev(k) = alev(k) * p0
-      else
-        call nfcheckload(ncid, met_params%apv, [ilevel], [1], alev(k:k), units=pressure_units)
+
+  !   TODO read ptop from file (only needed for sigma), but not in emep data
+    ptop = 100. ! hPa
+  !       if(ivcoor.eq.2) ptop=idata(19)
+  !..p0 for hybrid loaded to ptop, ap is a * p0
+    if (ivcoor /= 2 .AND. .NOT. met_params%ptopv == '') then
+      call nfcheckload(ncid, met_params%ptopv, (/0/), (/1/), ptoptmp, units=pressure_units)
+      ptop = ptoptmp(1)
+    end if
+  !..alevel (here) only for eta levels
+    if ( .NOT. met_params%apv == '') then
+      call nfcheckload(ncid, met_params%apv, (/ilevel/), (/1/), alev(k:k), units=pressure_units)
+      call nfcheckload(ncid, met_params%bv, (/ilevel/), (/1/), blev(k:k), units="1")
+      if (ivcoor /= 2 .AND. .NOT. met_params%ptopv == '') then
+      !..p0 for hybrid loaded to ptop, ap is a * p0
+        alev(k) = alev(k) * ptop
       end if
     end if
-    if (met_params%bv /= '') then
-      call nfcheckload(ncid, met_params%bv, [ilevel], [1], blev(k:k), units="1")
-    end if
-    if (met_params%sigmav /= '') then
+    if (.NOT. met_params%sigmav == '') then
     ! reusing blev(k) for sigma(k) later
       call nfcheckload(ncid, met_params%sigmav, [ilevel], [1], blev(k:k))
     end if
@@ -314,10 +288,9 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
   !..sigma_dot/eta_dot (0 at surface)
   !..eta: eta_dot (or omega) stored in the same levels as u,v,th.
     if (met_params%sigmadotv == '') then
-      w2 = 0
+      w_io = 0
     else
-      call nfcheckload(ncid, met_params%sigmadotv, &
-          start4d, count4d, w2(:,:,k))
+      call nfcheckload(ncid, met_params%sigmadotv, start4d, count4d, w_io(:, :, k))
     end if
 
   end do ! k=nk,2,-1
@@ -329,24 +302,24 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
       enspos, timepos, met_params%has_dummy_dim)
 
 ! ps
-  call nfcheckload(ncid, met_params%psv, start3d, count3d, ps2(:,:), units=pressure_units)
+  call nfcheckload(ncid, met_params%psv, start3d, count3d, ps_io(:, :), units=pressure_units)
 
 ! u10m
 ! v10m
   if (.not.met_params%use_model_wind_for_10m) then
-    call nfcheckload(ncid, met_params%xwind10mv, start3d, count3d, u2(:,:,1), units=xy_wind_units)
-    call nfcheckload(ncid, met_params%ywind10mv, start3d, count3d, v2(:,:,1), units=xy_wind_units)
+    call nfcheckload(ncid, met_params%xwind10mv, start3d, count3d, u_io(:, :, 1), units=xy_wind_units)
+    call nfcheckload(ncid, met_params%ywind10mv, start3d, count3d, v_io(:, :, 1), units=xy_wind_units)
   else
     if (enspos >= 0) then
       call nfcheckload(ncid, met_params%xwindv, [1, 1, enspos+1, surface_index, timepos], &
-          [nx, ny, 1, 1, 1], u2(:,:,1), units=xy_wind_units)
+          [nx, ny, 1, 1, 1], u_io(:, :, 1), units=xy_wind_units)
       call nfcheckload(ncid, met_params%ywindv, [1, 1, enspos+1, surface_index, timepos], &
-          [nx, ny, 1, 1, 1], v2(:,:,1), units=xy_wind_units)
+          [nx, ny, 1, 1, 1], v_io(:, :, 1), units=xy_wind_units)
     else
       call nfcheckload(ncid, met_params%xwindv, [1, 1, surface_index, timepos], &
-          [nx, ny, 1, 1], u2(:,:,1), units=xy_wind_units)
+          [nx, ny, 1, 1], u_io(:, :, 1), units=xy_wind_units)
       call nfcheckload(ncid, met_params%ywindv, [1, 1, surface_index, timepos], &
-          [nx, ny, 1, 1], v2(:,:,1), units=xy_wind_units)
+          [nx, ny, 1, 1], v_io(:, :, 1), units=xy_wind_units)
     endif
   endif
 
@@ -354,9 +327,9 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
 !..(only for output to results file)
   if(imslp /= 0) then
     if (met_params%mslpv /= '') then
-      call nfcheckload(ncid, met_params%mslpv, start3d, count3d, pmsl2(:,:), units=pressure_units)
+      call nfcheckload(ncid, met_params%mslpv, start3d, count3d, pmsl_io(:, :), units=pressure_units)
     else if (met_params%psv /= '') then
-      call nfcheckload(ncid, met_params%psv, start3d, count3d, pmsl2(:,:), units=pressure_units)
+      call nfcheckload(ncid, met_params%psv, start3d, count3d, pmsl_io(:, :), units=pressure_units)
     else
       write(iulog,*) 'Mslp not found. Not important.'
       imslp=0
@@ -375,10 +348,11 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
   if (met_params%need_precipitation) then
     call read_precipitation(ncid, nhdiff_precip, timepos, timeposm1)
   else
-    precip = 0.0
+    precip_io = 0.0
   endif
 
-  call read_drydep_required_fields(ncid, timepos, timeposm1, itimefi)
+  ! nhdiff_precip is timestep for accumulated fields, using it in case fluxes are accumulated
+  call read_drydep_required_fields(ncid, nhdiff_precip, timepos, timeposm1, itimefi)
 
 ! first time initialized data
   if (first_time_read) then
@@ -387,16 +361,17 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
     call compute_vertical_coords(alev, blev, ptop)
 
   !..compute map ratio
-    call mapfield(1,0,igtype,gparam,nx,ny,xm,ym,&
-        xm, & ! Ignored when icori = 0
-        dxgrid,dygrid,ierror)
-    if(ierror /= 0) then
-      write(iulog,*) 'MAPFIELD ERROR. ierror= ',ierror
-      write(error_unit,*) 'MAPFIELD ERROR. ierror= ',ierror
+    dummy_fc(1,1) = 0.0
+    call mapfield(1, 0, igtype, gparam, nx, ny, xm, ym, &
+        dummy_fc, & ! Ignored when icori = 0
+        dxgrid, dygrid, ierror)
+    if (ierror /= 0) then
+      write (iulog, *) 'MAPFIELD ERROR. ierror= ', ierror
+      write (error_unit, *) 'MAPFIELD ERROR. ierror= ', ierror
       error stop 255
     end if
-    gparam(7)=dxgrid
-    gparam(8)=dygrid
+    gparam(7) = dxgrid
+    gparam(8) = dygrid
       !..set garea size of each grid square (m**2) in output grid-size
     field1 = abs((dxgrid/xm)*(dygrid/ym)) / (output_resolution_factor*output_resolution_factor)
     call hres_field(field1, garea, .true.)
@@ -404,21 +379,28 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
   ! end initialization
   end if
 
+  call metcalc_timer%start()
   if (met_params%temp_is_abs) then
-    if (allocated(t2_abs)) t2_abs(:,:,:) = t2
+    if (allocated(t2_abs)) t_abs_io(:,:,:) = t_io
   !..abs.temp. -> pot.temp.
-    do k=2,nk
-      associate(p => alevel(k) + blevel(k)*ps2)
-        t2(:,:,k) = t2(:,:,k)*t2thetafac(p)
-      end associate
+    do k = 2, nk
+      do j = 1, ny
+        do i = 1, nx
+          p = alevel(k) + blevel(k)*ps_io(i,j)
+          t_io(i,j,k) = t_io(i,j,k)*t2thetafac(p)
+        end do
+      end do
     end do
   else
     if (allocated(t2_abs)) then
       ! pot.temp -> abs.temp
       do k=2,nk
-        associate(p => alevel(k) + blevel(k)*ps2)
-          t2(:,:,k) = t2(:,:,k)/t2thetafac(p)
-        end associate
+        do j = 1, ny
+          do i = 1, nx
+            p = alevel(k) + blevel(k)*ps_io(i,j)
+            t_abs_io(i,j,k) = t_io(i,j,k)/t2thetafac(p)
+          end do
+          end do
       end do
     endif
   end if
@@ -436,88 +418,89 @@ subroutine readfield_nc(istep, backward, itimei, ihr1, ihr2, &
   !..omega -> etadot, or rather etadot derived from continuity-equation
     call om2edot
   ! om2edot take means of omega (=0) and continuity-equation, -> use only continuity equation
-    w2 = 2.0*w2
+      w_io = 2.0*w_io
   end if
+  call metcalc_timer%stop_and_log()
 
 !..sigma_dot/eta_dot 0 at surface
-  w2(:,:,1) = 0.0
+  w_io(:, :, 1) = 0.0
 
 !..no temperature at or near surface (not used, yet)
-  t2(:,:,1) = -999.0
+  t_io(:, :, 1) = -999.0
 
-  if(backward) then
+  if (backward) then
   ! backward-calculation, switch sign of winds
-    u2 = -u2
-    v2 = -v2
-    w2 = -w2
+    u_io = -u_io
+    v_io = -v_io
+    w_io = -w_io
   end if
 
 
 ! test---------------------------------------------------------------
-  write(iulog,*) 'k,k_model,alevel,blevel,vlevel,p,dp:'
-  px=alevel(nk)+blevel(nk)*1000.
-  do k=nk,1,-1
-    p=alevel(k)+blevel(k)*1000.
-    write(iulog,fmt='(1x,2i5,f9.2,2f9.5,f8.0,f6.0)') &
-        k,klevel(k),alevel(k),blevel(k),vlevel(k),p,p-px
-    px=p
+  write (iulog, *) 'k,k_model,alevel,blevel,vlevel,p,dp:'
+  px = alevel(nk) + blevel(nk)*1000.
+  do k = nk, 1, -1
+    p = alevel(k) + blevel(k)*1000.
+    write (iulog, fmt='(1x,2i5,f9.2,2f9.5,f8.0,f6.0)') &
+      k, klevel(k), alevel(k), blevel(k), vlevel(k), p, p - px
+    px = p
   end do
 
 ! test---------------------------------------------------------------
 
-  if(idebug == 1) then
-    call ftest('u  ', u2, reverse_third_dim=.true.)
-    call ftest('v  ', v2, reverse_third_dim=.true.)
-    call ftest('w  ', w2, reverse_third_dim=.true.)
-    call ftest('t  ', t2, reverse_third_dim=.true.)
-    call ftest('ps ', ps2)
+  if (idebug == 1) then
+    call ftest('u  ', u_io, reverse_third_dim=.true.)
+    call ftest('v  ', v_io, reverse_third_dim=.true.)
+    call ftest('w  ', w_io, reverse_third_dim=.true.)
+    call ftest('t  ', t_io, reverse_third_dim=.true.)
+    call ftest('ps ', ps_io)
     if (istep > 0) &
-      call ftest('pre', precip(:,:))
-  end if
+        call ftest('pre', precip_io(:, :))
+    end if
 
 
   if (istep == 0) then
   ! test---------------------------------------------------------------
-    write(iulog,*) 'k,ahalf,bhalf,vhalf,p,dp:'
-    px=ahalf(nk)+bhalf(nk)*1000.
-    do k=nk,1,-1
-      p=ahalf(k)+bhalf(k)*1000.
-      write(iulog,fmt='(1x,i5,f9.2,2f9.5,f8.0,f6.0)') &
-          k,ahalf(k),bhalf(k),vhalf(k),p,p-px
-      px=p
+    write (iulog, *) 'k,ahalf,bhalf,vhalf,p,dp:'
+    px = ahalf(nk) + bhalf(nk)*1000.
+    do k = nk, 1, -1
+      p = ahalf(k) + bhalf(k)*1000.
+      write (iulog, fmt='(1x,i5,f9.2,2f9.5,f8.0,f6.0)') &
+        k, ahalf(k), bhalf(k), vhalf(k), p, p - px
+      px = p
     end do
   ! test---------------------------------------------------------------
 
   !..level table for (vertical) interpolation
   !..(remember that fields are stored bottom to top
   !.. and that all parameters now are in the same levels)
-    write(iulog,*) 'ivlevel:'
-    write(iulog,*) 'k,i1,i2,vlevel(k+1),vlevel(k)'
-    i2=-1
-    do k=nk-1,1,-1
-      i1=i2+1
-      i2=vlevel(k)*10000.
-      if(k == 1) i2=10000
-      do i=i1,i2
-        ivlevel(i)=k
-      end do
-      write(iulog,*) k,i1,i2,vlevel(k+1),vlevel(k)
+    write (iulog, *) 'ivlevel:'
+    write (iulog, *) 'k,i1,i2,vlevel(k+1),vlevel(k)'
+    i2 = -1
+    do k = nk - 1, 1, -1
+      i1 = i2 + 1
+      i2 = vlevel(k)*10000.
+      if (k == 1) i2 = 10000
+      do i = i1, i2
+        ivlevel(i) = k
+    end do
+      write (iulog, *) k, i1, i2, vlevel(k + 1), vlevel(k)
     end do
 
   !..level table for concentration in each sigma/eta layer
   !..(layers here as in the input model, no '10m' layer,
   !.. but ordering bottom to top, reorder at time of output)
-    write(iulog,*) 'ivlayer:'
-    write(iulog,*) 'k,i1,i2,vhalf(k+1),vhalf(k)'
-    i2=-1
-    do k=nk-1,1,-1
-      i1=i2+1
-      i2=nint(vhalf(k)*10000.)
-      if(k == 1) i2=10000
-      do i=i1,i2
-        ivlayer(i)=k
-      end do
-      write(iulog,*) k,i1,i2,vhalf(k+1),vhalf(k)
+    write (iulog, *) 'ivlayer:'
+    write (iulog, *) 'k,i1,i2,vhalf(k+1),vhalf(k)'
+    i2 = -1
+    do k = nk - 1, 1, -1
+      i1 = i2 + 1
+      i2 = nint(vhalf(k)*10000.)
+      if (k == 1) i2 = 10000
+      do i = i1, i2
+        ivlayer(i) = k
+    end do
+    write (iulog, *) k, i1, i2, vhalf(k + 1), vhalf(k)
     end do
   end if
 
@@ -563,8 +546,7 @@ subroutine read_precipitation(ncid, nhdiff, timepos, timeposm1)
   use iso_fortran_env, only: error_unit
   use snapdebug, only: iulog
   use snapmetML, only: met_params
-  use snapfldML, only: field1, field2, field3, field4, precip, &
-      enspos
+  use snapfldML, only: precip_io, enspos
   use snapdimML, only: nx, ny
   USE snapfilML, only: nctype
   use wetdepML, only: requires_extra_precip_fields, wetdep_precompute
@@ -582,6 +564,15 @@ subroutine read_precipitation(ncid, nhdiff, timepos, timeposm1)
   integer :: start3d(7), count3d(7)
   real :: unitScale
   real :: totalprec
+  integer :: ierror
+  real, allocatable :: field1(:,:), field2(:,:), field3(:,:), field4(:,:)
+
+  allocate(field1, field2, field3, field4, mold=precip_io, stat=ierror)
+  if (ierror /= 0) then
+    write (iulog, *) 'Error allocating fields for precipitation'
+    write (error_unit, *) 'Error allocating fields for precipitation'
+    error stop 255
+  end if
 
   if (met_params%precaccumv /= '') then
   !..precipitation between input time 't1' and 't2'
@@ -601,7 +592,7 @@ subroutine read_precipitation(ncid, nhdiff, timepos, timeposm1)
     call nfcheckload(ncid, met_params%precaccumv, &
           start3d, count3d, field2(:,:))
 
-    precip(:, :) = (field2 - field1)/nhdiff
+    precip_io(:, :) = (field2 - field1)/nhdiff
   else if (met_params%precstratiaccumv /= '') then
     ! accumulated stratiform and convective precipitation
     !..precipitation between input time 't1' and 't2'
@@ -632,36 +623,34 @@ subroutine read_precipitation(ncid, nhdiff, timepos, timeposm1)
     endif
 
     call read_precip_unit_scale(ncid, met_params%precstratiaccumv, unitScale)
-
-    precip(:,:) = (field3 + field4) - (field1 + field2)
-    precip(:,:) = precip/nhdiff*unitScale
+    precip_io(:,:) = ((field3 + field4) - (field1 + field2))/nhdiff * unitScale
   else if (met_params%total_column_rain /= '') then
-      call calc_2d_start_length(start3d, count3d, nx, ny, 1, &
-          enspos, timepos, met_params%has_dummy_dim)
-      call nfcheckload(ncid, met_params%total_column_rain, &
-          start3d, count3d, field3)
-      precip(:,:) = field3
-      write(error_unit, *) "Check precipation correctness"
+    call calc_2d_start_length(start3d, count3d, nx, ny, 1, &
+        enspos, timepos, met_params%has_dummy_dim)
+    call nfcheckload(ncid, met_params%total_column_rain, &
+        start3d, count3d, field3)
+    precip_io(:,:) = field3
+    write (error_unit, *) "Check precipation correctness"
   else
   !..non-accumulated emissions in stratiform and convective
     call calc_2d_start_length(start3d, count3d, nx, ny, -1, &
               enspos, timepos, met_params%has_dummy_dim)
     call nfcheckload(ncid, met_params%precstrativrt, &
-        start3d, count3d, field1(:,:))
+        start3d, count3d, field1(:, :))
     if (met_params%precconvrt /= '') then
       call nfcheckload(ncid, met_params%precconvrt, &
-          start3d, count3d, field2(:,:))
+          start3d, count3d, field2(:, :))
     else
       field2 = 0.
     endif
 
     unitScale = 3600.*1000.0 ! m/s -> mm/h
     if (nctype == 'gfs_grib_filter_fimex') unitScale = 3600. !kg/m3/s -> mm/h
-    precip(:,:) = (field1 + field2)*unitScale
+    precip_io(:,:) = (field1 + field2)*unitScale
   end if
 
-  where (precip < 0.0)
-    precip = 0.0
+  where (precip_io < 0.0)
+    precip_io = 0.0
   end where
 
   if (requires_extra_precip_fields()) then
@@ -676,13 +665,13 @@ subroutine read_precipitation(ncid, nhdiff, timepos, timeposm1)
   endif
 
   call wetdep_precompute()
-end subroutine
+end subroutine read_precipitation
 
 
   subroutine read_extra_precipitation_fields(ncid, timepos)
     use iso_fortran_env, only: error_unit, real32
     use snaptabML, only: g
-    use snapfldML, only: ps2, precip3d, cw3d, cloud_cover, enspos
+    use snapfldML, only: ps_io, precip3d, cw3d, cloud_cover, enspos
     use snapgrdML, only: ahalf, bhalf, klevel
     use snapdimML, only: nx, ny, nk
     use snapmetML, only: met_params
@@ -730,7 +719,7 @@ end subroutine
         snow_in_air = 0.0
       end where
 
-      pdiff(:,:) = 100*( (ahalf(k-1) - ahalf(k)) + (bhalf(k-1) - bhalf(k))*ps2 )
+      pdiff(:,:) = 100*( (ahalf(k-1) - ahalf(k)) + (bhalf(k-1) - bhalf(k))*ps_io )
 
       precip3d(:,:,k) = rain_in_air + graupel_in_air + snow_in_air
       precip3d(:,:,k) = precip3d(:,:,k) * pdiff / g
@@ -755,7 +744,7 @@ end subroutine
   subroutine read_extra_precipitation_fields_infer_3d_precip(ncid, timepos)
     use iso_fortran_env, only: error_unit, real32
     use snaptabML, only: g
-    use snapfldML, only: ps2, precip3d, cw3d, cloud_cover, enspos, precip
+    use snapfldML, only: ps_io, precip3d, cw3d, cloud_cover, enspos, precip_io
     use snapgrdML, only: ahalf, bhalf, klevel
     use snapdimML, only: nx, ny, nk
     use snapmetML, only: met_params
@@ -789,7 +778,7 @@ end subroutine
       call calc_2d_start_length(start, count, nx, ny, ilevel, &
           enspos, timepos, met_params%has_dummy_dim)
 
-      pdiff(:,:) = 100*( (ahalf(k-1) - ahalf(k)) + (bhalf(k-1) - bhalf(k))*ps2 )
+      pdiff(:,:) = 100*( (ahalf(k-1) - ahalf(k)) + (bhalf(k-1) - bhalf(k))*ps_io )
       call nfcheckload(ncid, met_params%mass_fraction_cloud_condensed_water_in_air, start, count, cloud_water(:,:))
       call nfcheckload(ncid, met_params%mass_fraction_cloud_ice_in_air, start, count, cloud_ice(:,:))
 
@@ -797,7 +786,7 @@ end subroutine
 
       ! Use cloud water to assign precipitation at model levels
       normaliser(:,:) = normaliser + cw3d(:,:,k)
-      precip3d(:,:,k) = precip * cw3d(:,:,k)
+      precip3d(:,:,k) = precip_io * cw3d(:,:,k)
 
       call nfcheckload(ncid, met_params%cloud_fraction, start, count, cloud_cover(:,:,k))
     enddo
@@ -814,14 +803,14 @@ end subroutine
           elseif (k == klimit) then
             ! Put all precip at level closest to 0.67, analoguous
             ! with the old formulation of the precipitation
-            precip3d(i,j,k) = precip(i,j)
+            precip3d(i,j,k) = precip_io(i,j)
           endif
         enddo
       enddo
     enddo
     end block
   end subroutine
-  
+
 
 
 !> calculate the start and length paramters for slicing
@@ -962,58 +951,6 @@ subroutine get_conversion_factor(ncid, varid, target_units, factor)
   if (nferr /= NF90_NOERR) return
 
   factor = conversion_factor(current_units, target_units)
-end subroutine
-
-subroutine nfcheckloadscalar(ncid, varname, output, return_status, units)
-  use ieee_arithmetic, only: ieee_value, IEEE_QUIET_NAN
-  use iso_fortran_env, only: real32
-
-  integer, intent(in) :: ncid
-  character(len=*), intent(in) :: varname
-  real(real32), intent(out) :: output
-  !> Return status instead of panic
-  integer, intent(out), optional :: return_status
-  character(len=*), intent(in), optional :: units
-
-  real(real32) :: factor, offset, fillvalue
-  integer :: varid, status
-
-  if (present(return_status)) return_status = NF90_NOERR
-
-  status = nf90_inq_varid(ncid, varname, varid)
-  if (status /= NF90_NOERR .and. present(return_status)) then
-    return_status = status
-    return
-  endif
-  call check(status, varname)
-
-  write (iulog,*) "reading "//trim(varname)//", as scalar"
-  status = nf90_get_var(ncid, varid, output)
-  if (status /= NF90_NOERR .and. present(return_status)) then
-    return_status = status
-    return
-  endif
-  call check(status, varname)
-
-  call fillscaleoffset(ncid, varid, fillvalue, factor, offset, status)
-  if (status /= NF90_NOERR .and. present(return_status)) then
-    return_status = status
-    return
-  endif
-  call check(status)
-
-  if (output == fillvalue) then
-    output = IEEE_VALUE(fillvalue, IEEE_QUIET_NAN)
-  end if
-
-  if (factor /= 1. .OR. offset /= 0.) then
-    output = output*factor + offset
-  end if
-
-  if (present(units)) then
-    call get_conversion_factor(ncid, varid, units, factor)
-    output = output*factor
-  endif
 end subroutine
 
 subroutine nfcheckload1d(ncid, varname, start, length, field, return_status, units)
@@ -1216,45 +1153,61 @@ subroutine compute_vertical_coords(alev, blev, ptop)
       bhalf(k) = (blevel(k) + blevel(k + 1))*0.5
     end if
   end do
-
-  ahalf(2) = 0
-  ahalf(3) = 0.03757813
-  ahalf(4) = 0.228359375
-
-  do k=1,nk
-    p = alevel(k) + blevel(k) * standard_atmosphere
-    vlevel(k) = (p - ptop) / (standard_atmosphere - ptop)
-    p = ahalf(k) + bhalf(k) * standard_atmosphere
-    vhalf(k) = (p - ptop) / (standard_atmosphere - ptop)
-  end do
-
-
-  vhalf(1) = vlevel(1)
+  ahalf(nk) = alevel(nk)
+  bhalf(nk) = blevel(nk)
   vhalf(nk) = vlevel(nk)
 end subroutine
 
-  subroutine read_drydep_required_fields(ncid, timepos, timeposm1, itimefi)
+
+  subroutine read_accumulated_field(ncid, nhdiff, varname, timepos, start, startm1, count, field)
+    use iso_fortran_env, only: real32
+    integer, intent(in) :: ncid, timepos, start(7), startm1(7), count(7)
+!> time difference in hours between two fields
+    integer, intent(in) :: nhdiff
+    character(len=*), intent(in) :: varname
+    real(real32), intent(out) :: field(:, :)
+
+    real, allocatable :: tmp1(:, :), tmp2(:, :)
+    allocate(tmp1, tmp2, MOLD=field)
+
+    if (timepos == 1) then
+      call nfcheckload(ncid, varname, start, count, field(:, :))
+    else
+      call nfcheckload(ncid, varname, start, count, tmp1(:, :))
+      call nfcheckload(ncid, varname, startm1, count, tmp2(:, :))
+      field(:,:) = tmp2 - tmp1
+    endif
+    field(:,:) =  field / (3600 * nhdiff)
+  end subroutine read_accumulated_field
+
+  subroutine read_drydep_required_fields(ncid, nhdiff, timepos, timeposm1, itimefi)
     USE ieee_arithmetic, only: ieee_is_nan
-    USE iso_fortran_env, only: real64
+    USE iso_fortran_env, only: real64, error_unit
     use datetime, only: datetime_t
     use snapmetML, only: met_params
-    use snapfldML, only: xflux, yflux, hflux, z0, leaf_area_index, t2m, vd_dep, roa, ustar, monin_l, &
-      ps2, rs, raero, vs, enspos
-    use drydepml, only: classnr, requires_extra_fields_to_be_read, drydep_precompute
+    ! TODO1: make xflux and yflux temporary variables in readfield
+    ! TODO2: apply changes in readfield_fi to readfield_nc
+    use snapfldML, only: surface_stress, hflux, z0, t2m, vd_dep, ustar, &
+      ps2, raero, my, nu, enspos
+    use drydepml, only: drydep_precompute_meteo, drydep_precompute_particle, &
+      requires_extra_fields_to_be_read, classnr, lookup_z0
+    use ftestML, only: ftest
+    use snapdebug, only: idebug
     use snapdimML, only: nx, ny
     use snapparML, only: ncomp, run_comp, def_comp
-    
+    use vgravtablesML, only: vgrav
+
+
     integer, intent(in) :: ncid
-    integer, intent(in) :: timepos
-    integer, intent(in) :: timeposm1
+!> time difference in hours between two fields
+    integer, intent(in) :: nhdiff
+    integer, intent(in) :: timepos, timeposm1
     type(datetime_t), intent(in) :: itimefi
 
     integer :: start(7), startm1(7)
     integer :: count(7)
+    real, allocatable :: xflux(:, :), yflux(:, :)
     integer :: i, mm
-    real(real64) :: diam, dens
-
-    real, allocatable :: tmp1(:, :), tmp2(:, :)
 
     if (.not.requires_extra_fields_to_be_read()) then
       return
@@ -1265,73 +1218,60 @@ end subroutine
     call calc_2d_start_length(startm1, count, nx, ny, -1, &
           enspos, timeposm1, met_params%has_dummy_dim)
 
-    allocate(tmp1(nx,ny), tmp2(nx,ny))
 
-    ! Fluxes are integrated: Deaccumulate
-    if (timepos == 1) then
-      call nfcheckload(ncid, met_params%xflux, start, count, xflux(:,:))
-      call nfcheckload(ncid, met_params%yflux, start, count, yflux(:,:))
+    if (met_params%surface_stress /= "") then
+      ! Load surface_stress
+      call nfcheckload(ncid, met_params%surface_stress, start, count, surface_stress(:, :))
+    else if (met_params%xflux == "" .OR. met_params%yflux == "") then
+      ! Either surface_stress or xflux and yflux needs to be defined
+      error stop "Assertion error: Either surface_stress or xflux and yflux needs to be defined in the meteorological parameters"
     else
-      call nfcheckload(ncid, met_params%xflux, start, count, tmp1(:,:))
-      call nfcheckload(ncid, met_params%xflux, startm1, count, tmp2(:,:))
-      xflux(:,:) = tmp2 - tmp1
-      call nfcheckload(ncid, met_params%yflux, start, count, tmp1(:,:))
-      call nfcheckload(ncid, met_params%yflux, startm1, count, tmp2(:,:))
-      yflux(:,:) = tmp2 - tmp1
-    endif
-    ! TODO: Normalise by difference between intervals
-    xflux(:,:) =  xflux / 3600
-    yflux(:,:) =  yflux / 3600
+      allocate(xflux, yflux, MOLD=ps2)
+      ! Load and combine surface stress/momentum flux components
+      if (met_params%xflux_is_accumulated) then
+        call read_accumulated_field(ncid, nhdiff, met_params%xflux, timepos, start, startm1, count, xflux(:,:))
+      else
+        call nfcheckload(ncid, met_params%xflux, start, count, xflux(:,:))
+      endif
 
-    if (timepos == 1) then
+      if (met_params%yflux_is_accumulated) then
+        call read_accumulated_field(ncid, nhdiff, met_params%yflux, timepos, start, startm1, count, yflux(:,:))
+      else
+        call nfcheckload(ncid, met_params%yflux, start, count, yflux(:,:))
+      endif
+
+      surface_stress = hypot(yflux, xflux)
+    endif
+
+    if (met_params%hflux_is_accumulated) then
+      call read_accumulated_field(ncid, nhdiff, met_params%hflux, timepos, start, startm1, count, hflux(:,:))
+    else
       call nfcheckload(ncid, met_params%hflux, start, count, hflux(:,:))
+    endif
+    hflux(:,:) = -hflux ! Follow conventions for up/down
+
+    if (met_params%z0 == "") then
+      ! Load z0 from land use data if not defined in meteorology
+      z0(:,:) = lookup_z0(classnr, ustar, nu)
     else
-      call nfcheckload(ncid, met_params%hflux, start, count, tmp1(:,:))
-      call nfcheckload(ncid, met_params%hflux, start, count, tmp2(:,:))
-      hflux(:,:) = tmp2 - tmp1
+      call nfcheckload(ncid, met_params%z0, start, count, z0(:, :))
     endif
-    ! TODO: Normalise by difference between intervals
-    hflux(:,:) = -hflux / 3600 ! Follow conventions for up/down
-
-    call nfcheckload(ncid, met_params%z0, start, count, z0(:, :))
-
-    if (met_params%leaf_area_index /= "") then
-      call nfcheckload(ncid, met_params%leaf_area_index, start, count, leaf_area_index(:,:))
-    else ! Leaf area index may be split into patches which must be combined
-      block
-        real, allocatable :: leaf_area_index_p1(:,:), leaf_area_index_p2(:,:)
-        allocate(leaf_area_index_p1, leaf_area_index_p2, mold=leaf_area_index)
-        call nfcheckload(ncid, met_params%leaf_area_index_p1, start, count, leaf_area_index_p1(:,:))
-        call nfcheckload(ncid, met_params%leaf_area_index_p2, start, count, leaf_area_index_p2(:,:))
-
-        where (.not.ieee_is_nan(leaf_area_index_p1) .and. .not.ieee_is_nan(leaf_area_index_p2))
-          leaf_area_index = max(leaf_area_index_p1, leaf_area_index_p2)
-        elsewhere (.not.ieee_is_nan(leaf_area_index_p1))
-          leaf_area_index = leaf_area_index_p1
-        elsewhere (.not.ieee_is_nan(leaf_area_index_p2))
-          leaf_area_index = leaf_area_index_p2
-        elsewhere
-          leaf_area_index = 0.0
-        endwhere
-
-      end block
-    endif
-    where (ieee_is_nan(leaf_area_index))
-      leaf_area_index = 0.0
-    endwhere
 
     call nfcheckload(ncid, met_params%t2m, start, count, t2m(:, :))
 
+    call drydep_precompute_meteo(ps2*100., t2m, surface_stress, z0, hflux, &
+      ustar, raero, my, nu)
     do i=1,ncomp
       mm = run_comp(i)%to_defined
 
       if (def_comp(mm)%kdrydep == 1) then
-        diam = 2*def_comp(mm)%radiusmym*1e-6
-        dens = def_comp(mm)%densitygcm3*1e3
-        call drydep_precompute(ps2*100, t2m, yflux, xflux, z0, &
-            hflux, leaf_area_index, real(diam), real(dens), classnr, vd_dep(:, :, i), &
-            roa, ustar, monin_l, raero, vs, rs, itimefi)
-      endif
+        call drydep_precompute_particle(ps2*100., t2m, &
+          ustar, raero, my, nu, itimefi, &
+          def_comp(mm), classnr, vd_dep(:,:,i))
+        if (idebug == 1) then
+          call ftest('vd_'//trim(def_comp(mm)%compname), vd_dep(:,:,i))
+        endif
+      end if
     end do
   end subroutine
 

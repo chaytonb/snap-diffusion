@@ -1,7 +1,7 @@
 import datetime as dt
 import os
 
-from Snappy.Resources import Resources, MetModel
+from Snappy.Resources import MetModel, Resources
 
 
 class SnapAshResources:
@@ -21,6 +21,7 @@ class SnapAshResources:
         metmodel, dtime: dt.datetime, run_hours: int, fixed_run="best"
     ):
         if metmodel == MetModel.NrpaEC0p1:
+            # not using EEMEP.Resources since getECMeteorologyFiles has different signature
             res = Resources()
             return res.getECMeteorologyFiles(dtime, run_hours, fixed_run)
         else:

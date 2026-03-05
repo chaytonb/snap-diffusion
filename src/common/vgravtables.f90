@@ -20,21 +20,21 @@ module vgravtablesML
   private
 
 !> number of temperature levels in ::vgtable
-  integer, parameter, public :: numtempvg = 41
+  integer, parameter, public :: numtempvg = 41 ! 5deg incr
 !> number of pressure levels in ::vgtable
-  integer, parameter, public :: numpresvg = 25
+  integer, parameter, public :: numpresvg = 25 ! 200hPa
 
 !> table of gravity in m/s
 !>
-!> vgtable(temperature,pressure,component)
-  real, save, allocatable, public :: vgtable(:,:,:)
+!> vgtable(temperature,pressure,component%running)
+  real, save, allocatable, private :: vgtable(:,:,:)
 
-  real, parameter, public :: tincrvg = 200.0/float(numtempvg - 1)
-  real, parameter, public :: tbasevg = 273. - 120. - tincrvg
-  real, parameter, public :: pincrvg = 1200./float(numpresvg-1)
-  real, parameter, public :: pbasevg = 0. - pincrvg
+  real, parameter, private :: tincrvg = 200.0/float(numtempvg - 1)
+  real, parameter, private :: tbasevg = 273. - 120. - tincrvg
+  real, parameter, private :: pincrvg = 1200./float(numpresvg-1)
+  real, parameter, private :: pbasevg = 0. - pincrvg
 
-  public :: vgravtables, vgrav
+  public :: vgravtables_init, vgrav, vgrav_iter, visc, cun ! vgrav_iter only exposed for testing
 
   contains
 
@@ -63,7 +63,7 @@ subroutine vgravtables
   if (.not.allocated(vgtable)) allocate(vgtable(numtempvg,numpresvg,ncomp))
 
 
-do_comp: do n=1,ncomp
+  do_comp: do n=1,ncomp
 
     m= run_comp(n)%to_defined
     if (def_comp(m)%grav_type /= 2) then ! Not using gravity table
@@ -83,7 +83,7 @@ do_comp: do n=1,ncomp
 
         t= tbasevg + it*tincrvg
 
-        vg=vgrav(diam_part,rho_part,p,t)
+        vg=vgrav_zanetti(diam_part,rho_part,p,t)
         call iter(vgmod,vg,diam_part,rho_part,p,t)
 
       !..table in unit m/s (cm/s computed)
@@ -93,15 +93,51 @@ do_comp: do n=1,ncomp
   end do do_comp
 end subroutine vgravtables
 
+!> initialize gravitational tables for all components if needed
+!> and print surface gravity to log
+subroutine vgravtables_init()
+  !USE vgravtablesML, only: vgravtables, vgtable, pbasevg, tbasevg, pincrvg, tincrvg
+  USE iso_fortran_env, only: real64
+  USE snapparML, only: ncomp, run_comp, def_comp
+  USE snapdebug, only: iulog
+
+  integer :: i,m,ip,it
+  logical :: compute_grav_table
+
+  compute_grav_table = .false.
+  grav_do: do i=1,ncomp
+    m= run_comp(i)%to_defined
+    if(def_comp(m)%grav_type > 1) then
+      compute_grav_table = .true.
+      exit grav_do
+    endif
+  end do grav_do
+  if (.not.compute_grav_table) then
+    write(iulog,*) 'Computation of gravity tables not needed'
+    return
+  endif
+
+  write(iulog,*) 'Computing gravity tables...'
+  call vgravtables()
+  write(iulog,*) 'Surface gravity (1013hPa, 288K), direct and interpolated:'
+  it = (288-tbasevg)/tincrvg
+  ip = (1013-pbasevg)/pincrvg
+  do i=1,ncomp
+    m = run_comp(i)%to_defined
+    write(iulog,*) ' particle ', def_comp(m)%compname, ": ", vgtable(it,ip,i), vgrav(i,1000., 300.)
+  end do
+end subroutine
+
+
 !>  function for calculating viscosity of the air depending on
 !>  temperature. According to RAFF (1999), Kyle (1991).
 !>
-!>  etha(T) = 1.72e-2*(393/(T+120))*(T/273)**1.5
+!>  etha(T) = 1.72e-4*(393/(T+120))*(T/273)**1.5
 !>
 !>  etha         - viscosity of the air (g cm-1 s-1)
 !>
 !>  T             - absolute temperature (K)
-  pure real function visc(t)
+  elemental real function visc(t)
 ! c    real etha    ! viscosity of the air (g cm-1 s-1)
     real, intent(in) :: t !< absolute temperature (K)
 
@@ -125,12 +161,12 @@ end subroutine vgravtables
 !>
 !>  a3=0.55        - constant
 !>
-  pure real function cun(dp)
+  pure elemental real function cun(dp)
     real, intent(in) :: dp !< particle size in micro meters
 ! c    real c        ! Cunningham factor
     real, parameter :: a1=1.257,a2=0.40,a3=0.55 ! constants
 ! real :: dp_fac    ! conversion factor micro meters -> cm
-    real, parameter :: l=0.0653        ! free path of air molecules
+    real, parameter :: l=0.0653        ! free path of air molecules [micro meters]
 
     cun=1.0+(2.0*l/dp)*(a1+a2*exp(-a3*dp/l))
   end function cun
@@ -148,12 +184,68 @@ end subroutine vgravtables
     real :: etha    ! viscosity of the air (g cm-1 s-1)
     real :: re        ! Reynolds number
 
-    u0=vgrav(dp,rp,p,t)
+    u0=vgrav_zanetti(dp,rp,p,t)
     etha=visc(t)
     re=u*dp*1.0e-4*roa(p,t)/etha
     fit=u*(1.0+a1*re**a2)-u0
     if(u == 0.0) fit=-u0
   end function fit
+
+
+!>  access gravitational velocity interpolated from precomputed lookup-tables
+!>  vgrav in m/s
+  elemental real function vgrav(run_comp_idx, p,t)
+    USE iso_fortran_env, only: real64
+    use snapparML, only: run_comp, def_comp, GRAV_TYPE_FIXED
+    implicit none
+
+    integer, intent(in) :: run_comp_idx !< running component number
+    real, intent(in) :: p !< atmospheric presure (hPa)
+    real, intent(in) :: t !< air absolute temperature (K)
+
+    real(real64) :: grav1, grav2, pvg, tvg
+    integer :: ip, it, m
+
+    ! return fixed gravity if set
+    m = run_comp(run_comp_idx)%to_defined
+    if (def_comp(m)%grav_type == GRAV_TYPE_FIXED) then
+      vgrav = def_comp(m)%gravityms
+      return
+    end if
+
+    ! old       gravity= vgrav(radiusmym(m),densitygcm3(m),p,t)
+      ip = (p-pbasevg)/pincrvg
+      ip = max(ip, 1)
+      ip = min(size(vgtable,2)-1, ip)
+      pvg = pbasevg + ip*pincrvg
+      it = (t-tbasevg)/tincrvg
+      it = max(it, 1)
+      it = min(size(vgtable,1)-1, it)
+      tvg = tbasevg + it*tincrvg
+
+      grav1 = vgtable(it,ip,run_comp_idx) &
+          + (vgtable(it+1,ip,run_comp_idx)-vgtable(it,ip,run_comp_idx)) &
+          *(t-tvg)/tincrvg
+      ip = ip + 1
+      grav2 = vgtable(it,ip,run_comp_idx) &
+          + (vgtable(it+1,ip,run_comp_idx)-vgtable(it,ip,run_comp_idx)) &
+          *(t-tvg)/tincrvg
+      vgrav = grav1 + (grav2-grav1) * (p-pvg)/pincrvg
+
+  end function vgrav
+
+!< computed and iterated gravitational settling velocity in m/s
+elemental real function  vgrav_iter(dp, rp, p, t)
+  real, intent(in) :: dp !< particle size (diameter) in micro meters
+  real, intent(in) :: rp !< particle density in g/cm3
+  real, intent(in) :: p !< atmospheric pressure in hPa
+  real, intent(in) :: t !< temperature of the air in K
+  real :: vg, u0 !< vg according to Stokes law in cm/s
+
+  u0 =  vgrav_zanetti(dp,rp,p,t)
+  call iter(vg,u0,dp,rp,p,t)
+  vgrav_iter=vg*0.01 ! cm/s -> m/s
+end function vgrav_iter
 
 !>  program for calculating gravitational setling velocity for particles
 !>  according to Zannetti (1990).
@@ -164,24 +256,20 @@ end subroutine vgravtables
 !>
 !>  etha=etha(t)    - viscosity of the air (g cm-1 s-1)
 !>  c(dp)        - Cunningham factor for the small particles
-  pure elemental real function vgrav(dp,rp,p,t)
+  elemental real function vgrav_zanetti(dp,rp,p,t)
     real, intent(in) :: dp !< particle size in micro meters
     real, intent(in) :: rp !< density of particle (g/cm3)
     real, intent(in) :: p !< atmospheric presure (hPa)
     real, intent(in) :: t !< air absolute temperature (K)
 
-    real, parameter :: g = 981.0 ! acceleration of gravity
-    real :: ra        ! density of the air
-    real :: etha    ! viscosity of the air
+    real, parameter :: g = 981.0 ! acceleration of gravity (cm/s)
 
-    ra=roa(p,t)
-    etha=visc(t)
-    vgrav=(dp*0.0001)**2*g*(rp-ra)*cun(dp)/(18.0*etha)
+    vgrav_zanetti=(dp*0.0001)**2*g*(rp-roa(p,t))*cun(dp)/(18.0*visc(t))  ! (cm/s)
 
-  end function vgrav
+  end function vgrav_zanetti
 
 !>  iteration procedure for calculating vg
-subroutine iter(vg,u0,dp,rp,p,t)
+pure subroutine iter(vg,u0,dp,rp,p,t)
   real, intent(out) :: vg !< computed gravitational settling velocity in cm/s
   real, intent(in) :: u0 !< vg according to Stokes law in cm/s
   real, intent(in) :: dp !< particle size (diameter) in micro meters
@@ -226,13 +314,14 @@ subroutine iter(vg,u0,dp,rp,p,t)
   return
 end subroutine iter
 
+
 !>  function for calculating density of the air depending on
 !>  temperature and pressure. According to RAFF (1999).
 !>
 !>  ro(P,T) = P/(R*T)
 !>
 !>  ro         - density of the dry air (g/cm3)
-  pure real function roa(p,t)
+  elemental real function roa(p,t)
     real, intent(in) :: t !< absolute temperature (K)
     real, intent(in) :: p !< presure (hPa)
     real, parameter :: r = 287.04 ! Specific gas constant (J kg-1 K-1)

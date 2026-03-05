@@ -3,18 +3,18 @@
 
 F77 = gfortran
 
-F77FPEFLAGS= -ffpe-trap=invalid,zero,overflow
-F77BOUNDFLAGS= -fbounds-check
-#F77FLAGS=-DVERSION=\"$(VERSION)\" -O0 -ftree-vectorize -fno-math-errno -g -pg -fno-inline -fno-pie -no-pie -mavx2 -mfma -Wall -Wextra -fimplicit-none -fmodule-private -Wno-conversion -Wno-compare-reals
-F77FLAGS=-DVERSION=\"$(VERSION)\" -O2 -ftree-vectorize -fno-math-errno -g -mavx2 -mfma -Wall -Wextra -fimplicit-none -fmodule-private -Wno-conversion -Wno-compare-reals
+F77FPEFLAGS= -ffpe-trap=invalid,zero,overflow -fno-openmp
+F77BOUNDFLAGS= -fbounds-check -fno-openmp
+F77FLAGS=-DVERSION=\"$(VERSION)\" -O2 -ftree-vectorize -fno-math-errno -fopenmp -g -mavx2 -mfma -Wall -Wextra -fimplicit-none -fmodule-private -Wno-conversion -Wno-compare-reals
+# -flto gives only 2-4% speedup, not using since more difficult debug and optimize steps
 ifdef SNAP_DEBUG_CHECKS
   F77FLAGS+=$(F77BOUNDFLAGS) $(F77FPEFLAGS)
 endif
 ifdef SNAP_BOUND_CHECKS
   F77FLAGS+=$(F77BOUNDFLAGS)
 endif
-ifdef SNAP_USE_OMP
-  F77FLAGS+=-fopenmp
+ifdef SNAP_DISABLE_OMP
+  F77FLAGS+=-fno-openmp
 endif
 
 # optional versioned fimex

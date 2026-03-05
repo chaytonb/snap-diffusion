@@ -119,7 +119,7 @@ contains
         .not.wetdep_scheme%use_vertical) then
         call wetdep2_init(tstep)
     endif
-      
+
   end subroutine
 
   subroutine deinit()
@@ -138,7 +138,7 @@ contains
     USE particleML, only: particle, extraParticle
     use snapparML, only: def_comp
     use snapfldml, only: depwet
-  
+
     real, intent(in) :: tstep
     type(particle), intent(inout) :: part
     type(extraParticle), intent(in) :: pextra
@@ -262,6 +262,7 @@ contains
 
       if(vminprec < 0.) then
         p2 = 1000.
+        p1 = p2
         k = 1
         do while (p2 > plim .AND. k < nk)
           k = k+1
@@ -482,7 +483,7 @@ contains
     endif
   end subroutine
 
-  
+
   subroutine wet_deposition_rate_ratm(wscav, precip, ccf, use_ccf)
     real, intent(out) :: wscav(:,:)
     real, intent(in) :: precip(:,:)
@@ -495,7 +496,7 @@ contains
 
     nx = size(precip,1)
     ny = size(precip,2)
-    
+
     do j=1,ny
       do i=1,nx
         if (use_ccf .and. (ccf(i,j) > 0.0)) then
@@ -624,42 +625,6 @@ contains
     mo = def_comp(part%icomp)%to_output
     !$OMP atomic
     dep(i, j, mo) = dep(i, j, mo) + real(radlost, kind=real64)
-  end subroutine
-
-
-  !> Laakso et al. 2003, Ultrafine particle scavenging coefficients
-  !> Valid for particle diameter in between 10 nm < diameter < 510 nm
-  !> Valid for precipitation intensity between 0-20 mm/h
-  elemental subroutine laakso_preciprate(dia_p, p, lambda)
-    !> Diameter of particle [m]
-    real, intent(in) :: dia_p
-    !> Precipitation intensity [mm/hr]
-    real, intent(in) :: p
-    !> Scavenging rate [1/s]
-    real, intent(out) :: lambda
-
-    ! [1/s]
-    real, parameter :: lambda0 = 1.0
-    ! [m]
-    real, parameter :: dia_p0 = 1.0
-    ! [mm/hr]
-    real, parameter :: p0 = 1.0
-
-    real, parameter :: a = 274.35758
-    real, parameter :: b = 332839.59273
-    real, parameter :: c = 226656.57259
-    real, parameter :: d = 58005.91340
-    real, parameter :: e = 6588.38582
-    real, parameter :: f = 0.244984
-
-    real(real64) :: dp, log10_l_l0
-
-    dp = log10(dia_p/ dia_p0)
-
-    log10_l_l0 = a + b*dp**-4 + c*dp**-3 + d * dp**-2 + e * dp**-1 + f*(p/p0)**0.5
-
-    lambda = lambda0 * 10.0**log10_l_l0
-
   end subroutine
 
 end module wetdepml

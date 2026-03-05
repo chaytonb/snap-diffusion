@@ -4,7 +4,7 @@ This is a rough setup to use SNAP with freely available meteorological data from
 
 ## Prerequisites
 
-This guide uses fimex: https://github.com/metno/fimex for conversion of grib to netcdf and for the conversion of pressure-levels to sigma-hybrid pressure-levesl.
+This guide uses fimex: https://github.com/metno/fimex for conversion of grib to netcdf and for the conversion of pressure-levels to sigma-hybrid pressure-levels.
 
 All input files can be found in the snap repository und [src/naccident/examples/gfs/](./)
 
@@ -12,11 +12,11 @@ All input files can be found in the snap repository und [src/naccident/examples/
 
 The NOMADS servers allow downloading data for regional subsets, which reduces the download amount largely: https://nomads.ncep.noaa.gov/ Select the grib_filter option of the desired dataset and then the desired model-run, i.e. 2019-12-02 00UTC https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?dir=%2Fgfs.20191202%2F00
 
-To download the first 16 timesteps of this model and ar region from [-10,50] longitude and [50,80] latitude, use a script like:
+To download the first 16 timesteps of this model and a region from [-10,50] longitude and [50,80] latitude, use a script like:
 
 ```sh
 # timesteps
-DATE=20200106
+DATE=20250907
 HOUR=00
 for x in 03 06 09 12 15 18 21 24 27 30 33 36 39 42 45 48 51; do
 
@@ -40,7 +40,8 @@ It is currently not possible to download a region at the datum-border 180deg to 
 
 ## Convert data to netcdf
 
-Use fimex to convert data to netcdf, and remove some unnecessary dimensions
+Use fimex to convert data to netcdf, and remove some unnecessary dimensions. Please note that the ncml
+files use the official shape-order as needed for fimex from version 2.0[^1].
 
 ```sh
 fimex --input.file=all.grib --input.config=cdmGribReaderConfigGFS.xml \
@@ -64,8 +65,9 @@ fimex --input.file=gfs_0p25deg_pl_${DATE}T${HOUR}Z.nc --input.config=sigmaHybrid
 
 ## Run the snap-model
 
-Adapt the contributed [snap.input](./snap.input) file with the source-term, in particular TIME.START and SET_RELEASE.POS= P=
-and run the model:
+Adapt the contributed [snap.input](./snap.input) file to use the freshly downloaded file `gfs_0p25deg_${DATE}T${HOUR}Z.nc`
+in `FIELD.INPUT=`.
+Adapt also `TIME.START=` and `SET_RELEASE.POS= P=` to your needs and run the model:
 
 ```sh
 bsnap_naccident snap.input
@@ -75,3 +77,4 @@ In approximately 5min, the snap.nc file is generated and can be seen with your p
 
 It is possible to declare several meteorological input file (here allVInt.nc) with the same area/resolution in the snap.input file. SNAP will automatically use the newest timesteps available.
 
+[^1]: For fimex 1.x, please edit the ncml files and make sure that `time` is the last dimension in the shape, e.g. `<variable name="to_hybrid" shape="longitude latitude hybrid time" type="int">`

@@ -26,9 +26,9 @@ module snaptabML
     integer, parameter :: mpretab = 500
 
 !> multiply pressure by this value to get index in pitab
-    real, parameter :: pmult = 0.1
-!>  Exner function, pitab(0:130) for p=0,10,20,...1300 hPa
-    real, save :: pitab(0:130)
+    real, parameter :: pmult = 1.
+!>  Exner function, pitab(0:1300) for p=0,1,2,...1300 hPa
+    real, save :: pitab(0:1300)
 
     real, parameter, public :: g=9.81, r=287.0, cp=1004.0
     real, parameter, public :: rcp = r/cp
@@ -53,7 +53,7 @@ module snaptabML
   interface exner
       module procedure :: exner_real32, exner_real64
   end interface
-  
+
 
     contains
 
@@ -83,7 +83,8 @@ module snaptabML
         t2thetafac = t2thetafac_table(nint(p*10.0 + 0.5))
       end function
 
-  elemental real(real32) function exner_real32(p) result(exner)
+  elemental real function exner_real32(p) result(exner)
+    USE iso_fortran_env, only: real32
     real(real32), intent(in) :: p  !> [hPa]
 
     real(real32) :: rtab
@@ -100,7 +101,8 @@ module snaptabML
     exner = e0 + (e1 - e0)*(rtab - itab)
   end function
 
-  elemental real(real64) function exner_real64(p) result(exner)
+  elemental real function exner_real64(p) result(exner)
+    USE iso_fortran_env, only: real64
     real(real64), intent(in) :: p  !> [hPa]
 
     real(real64) :: rtab

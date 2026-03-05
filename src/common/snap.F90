@@ -1,19 +1,6 @@
 ! SNAP: Servere Nuclear Accident Programme
-! Copyright (C) 1992-2021   Norwegian Meteorological Institute
-
-! This file is part of SNAP. SNAP is free software: you can
-! redistribute it and/or modify it under the terms of the
-! GNU General Public License as published by the
-! Free Software Foundation, either version 3 of the License, or
-! (at your option) any later version.
-
-! This program is distributed in the hope that it will be useful,
-! but WITHOUT ANY WARRANTY; without even the implied warranty of
-! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-! GNU General Public License for more details.
-
-! You should have received a copy of the GNU General Public License
-! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+! Copyright (C) 1992-2026   Norwegian Meteorological Institute
+! License: GNU GPL v3 or later
 
 ! SNAP - Severe Nuclear Accident Program
 
@@ -153,6 +140,8 @@
 ! * timestamp which will also be written to netcdf-files, default: now
 ! SIMULATION.START.DATE=2010-01-01_10:00:00
 ! LOG.FILE=     snap.log
+! ASYNC_IO.OFF ..................................... (default)
+! ASYNC_IO.ON
 ! DEBUG.OFF ..................................... (default)
 ! DEBUG.ON
 ! DEBUG.MASSBALANCE.FILE = "massbalance.txt"
@@ -162,13 +151,20 @@
 !> SNAP - Severe Nuclear Accident Program
 PROGRAM bsnap
   USE iso_fortran_env, only: real64, output_unit, error_unit, IOSTAT_END
+#ifdef _OPENMP
+  USE omp_lib, only: omp_set_max_active_levels
+#endif
+
   USE DateCalc, only: epochToDate, timeGM
   USE datetime, only: datetime_t, duration_t
-  USE snapdebug, only: iulog, idebug, acc_timer => prefixed_accumulating_timer
+  USE snapdebug, only: iulog, idebug
+  USE snaptimers, only: timeloop_timer, output_timer, input_timer, metcalc_timer, &
+                        release_timer, other_timer, particleloop_timer, initialize_timers
   USE snapdimML, only: nx, ny, nk, output_resolution_factor, ldata, maxsiz, mcomp, surface_index
   USE snapfilML, only: filef, itimer, ncsummary, nctitle, nhfmax, nhfmin, &
                        nctype, nfilef, simulation_start, spinup_steps
-  USE snapfldML, only: nhfout, enspos, hlevel2, ps2
+  USE snapfldML, only: nhfout, enspos, hlevel2, ps2, use_async_io, total_activity_lost_domain, &
+                       swap_fields_before_reading, swap_fields_after_reading
   USE snapmetML, only: init_meteo_params, met_params
   USE snapparML, only: component, run_comp, output_component, &
                        ncomp, nocomp, def_comp, nparnum, &
@@ -178,6 +174,7 @@ PROGRAM bsnap
                        klevel, imslp, itotcomp, gparam, &
                        igtype, imodlevel, modlevel_is_average, precipitation_in_output, &
                        alevel, blevel
+  USE vgravtablesML, only: vgravtables_init
   USE snaptabML, only: tabcon
   USE particleML, only: pdata, extraParticle
   USE allocateFieldsML, only: allocateFields, deallocateFields
@@ -189,8 +186,7 @@ PROGRAM bsnap
   USE rwalkML, only: rwalk_init, diffusion_scheme, bl_definition, record_stats, &
                      turbulence_master, eta_to_metres
   USE milibML, only: xyconvert
-  use snapfldML, only: total_activity_lost_domain
-  USE forwrdML, only: forwrd, forwrd_init
+  USE forwrdML, only: forwrd
   USE wetdepML, only: wetdep, wetdep_scheme, wetdep_scheme_t, &
     WETDEP_SUBCLOUD_SCHEME_UNDEFINED, WETDEP_SUBCLOUD_SCHEME_BARTNICKI, &
     WETDEP_INCLOUD_SCHEME_NONE, WETDEP_INCLOUD_SCHEME_TAKEMURA, &
@@ -203,24 +199,21 @@ PROGRAM bsnap
     wet_deposition_RATM => RATM_params, &
     WETDEP_INCLOUD_SCHEME_ROSELLE
 #endif
-  USE drydepml, only: drydep, drydep_scheme, &
-          DRYDEP_SCHEME_OLD, DRYDEP_SCHEME_NEW, DRYDEP_SCHEME_EMEP, &
-          DRYDEP_SCHEME_ZHANG, DRYDEP_SCHEME_EMERSON, DRYDEP_SCHEME_UNDEFINED, &
+  USE drydepml, only: drydep, drydep_scheme, requires_landfraction_file, &
+          DRYDEP_SCHEME_OLD, DRYDEP_SCHEME_NEW, &
+          DRYDEP_SCHEME_EMERSON, DRYDEP_SCHEME_UNDEFINED, &
           largest_landfraction_file,  drydep_unload => unload
   USE decayML, only: decay, decayDeps
   USE posintML, only: posint
-  USE bldpML, only: bldp
   USE releaseML, only: release, releases, tpos_bomb, nrelheight, mprel, &
                        mplume, nplume, iplume, npart, mpart, release_t
   USE init_random_seedML, only: init_random_seed, generate_normal_randoms
-  USE compheightML, only: compheight
-  USE readfield_ncML, only: readfield_nc
   USE snapfimexML, only: fimex_type => file_type, fimex_config => conf_file, fimex_interpolation => interpolation, fint
 #if defined(FIMEX)
-  USE readfield_fiML, only: readfield_fi
   USE filesort_fiML, only: filesort_fi
   use Fimex, only: fimex_set_loglevel => set_default_log_level, FIMEX_LOGLEVEL_WARN => LOGLEVEL_WARN
 #endif
+  USE readfieldML, only: readfield_and_compute
   USE releasefileML, only: releasefile
   USE filesort_ncML, only: filesort_nc
   USE utils, only: to_uppercase, to_lowercase
@@ -270,6 +263,11 @@ PROGRAM bsnap
   real :: tstep = 900
   logical :: adaptive_timesteps = .false.
   real :: rmlimit = -1.0, rnhrel, tf1, tf2, tnow, tnext
+  !> fractions from last timestep
+  real ::    rt1
+  !> fractions to next timestep
+  real :: rt2
+
   real ::    x(1), y(1)
   real :: weight, j, pressure_above, pressure_below
   integer:: above_index, below_index, height_k
@@ -292,12 +290,6 @@ PROGRAM bsnap
 
 !> name of selected release position
   character(len=40), save :: srelnam = "*"
-
-  !> Time spent in various components of SNAP
-  type(acc_timer) :: timeloop_timer
-  type(acc_timer) :: output_timer
-  type(acc_timer) :: input_timer
-  type(acc_timer) :: particleloop_timer
 
 #if defined(VERSION)
   character(len=*), parameter :: VERSION_ = VERSION
@@ -380,7 +372,9 @@ PROGRAM bsnap
   ntimefo = 0
 
 !..define fixed tables and constants (independant of input data)
-  call tabcon
+  call tabcon()
+  call vgravtables_init()
+  call initialize_timers()
 
 ! initialize random number generator for rwalk and release
   CALL init_random_seed()
@@ -405,6 +399,13 @@ PROGRAM bsnap
     write (error_unit, *) time_start
     call snap_error_exit(iulog)
   end if
+  if (requires_landfraction_file()) then
+    if (met_params%z0 == "") then
+      write(iulog,*) "Surface roughness not defined in meteorology, using land cover and lookup table."
+      write(error_unit,*) "Surface roughness not defined in meteorology, using land cover and lookup table."
+    endif
+  end if
+
 
   block
   logical :: is_time_before_run, is_time_after_run
@@ -580,25 +581,17 @@ PROGRAM bsnap
 
 
 ! reset readfield_nc (eventually, traj will rerun this loop)
-    if (ftype == "netcdf") then
-      call readfield_nc(-1, nhrun < 0, time_start, nhfmin, nhfmax, &
-                        time_file, ierror)
-    else if (ftype == "fimex") then
-#if defined(FIMEX)
-      call readfield_fi(-1, nhrun < 0, time_start, nhfmin, nhfmax, &
-                        time_file, ierror)
-#else
+    call input_timer%start()
+#if ! defined(FIMEX)
       error stop "A fimex read was requested, but fimex support is not included"// &
         " in this build"
 #endif
-    end if
-    if (ierror /= 0) call snap_error_exit(iulog)
-    ! call compheight
-    if (bl_definition /= 'get_bl_from_meteo') then
-      call bldp
-    endif
-
-
+    call readfield_and_compute(ftype, -1, nhrun < 0, time_start, nhfmin, nhfmax, &
+                   time_file, ierror)
+    write (error_unit, fmt="('input data: ',i4,3i3.2)") time_file
+    flush(output_unit)
+    call input_timer%stop_and_log()
+    call swap_fields_after_reading() ! only for async io, but does not hurt otherwise
 
     ! Initialise output
     if (idailyout == 1) then
@@ -633,8 +626,8 @@ PROGRAM bsnap
         call snap_error_exit(iulog)
       end if
       write (iulog, *) 'release   x,y:    ', x, y
-      if (x(1) < 1.01 .OR. x(1) > nx - 0.01 .OR. &
-          y(1) < 1.01 .OR. y(1) > ny - 0.01) then
+      if (x(1) < 1.01 .OR. x(1) > (nx - 0.01) .OR. &
+          y(1) < 1.01 .OR. y(1) > (ny - 0.01)) then
         write (iulog, *) 'ERROR: Release position outside field area'
         write (error_unit, *) 'ERROR: Release position outside field area'
         call snap_error_exit(iulog)
@@ -643,14 +636,15 @@ PROGRAM bsnap
       release_positions(irelpos)%grid_y = y(1)
     end block
 
-    timeloop_timer = acc_timer("time_loop:")
-    output_timer = acc_timer("output/accumulation:")
-    input_timer = acc_timer("Reading MET input:")
-    particleloop_timer = acc_timer("Particle loop:")
-
     ! start time loop
     itimei = time_start
     npartmax = 0
+#ifdef _OPENMP
+    ! both task and inner parallel do loops, so need 2 levels of parallelism
+    call omp_set_max_active_levels(2)
+#endif
+    !$OMP PARALLEL
+    !$OMP SINGLE
     time_loop: do istep = 0, nstep
       call timeloop_timer%start()
       write (iulog, *) 'istep,nplume,npart: ', istep, nplume, npart
@@ -663,52 +657,88 @@ PROGRAM bsnap
       !..read fields
       nhleft = abs((nstep - istep + 1)/nsteph)
 
-      if (next_input_step == istep .and. nhleft > 0) then
-        itimei = time_file
-        call input_timer%start()
-        if (ftype == "netcdf") then
-          call readfield_nc(istep, nhrun < 0, itimei, nhfmin, nhfmax, &
-                            time_file, ierror)
-#if defined(FIMEX)
-        elseif (ftype == "fimex") then
-          call readfield_fi(istep, nhrun < 0, itimei, nhfmin, nhfmax, &
-                            time_file, ierror)
-#endif
+      if (.not. use_async_io .or. istep == 0) then
+        if (next_input_step == istep .and. nhleft > 0) then
+          itimei = time_file
+          call input_timer%start()
+          if (.not. use_async_io) then
+            ! move all u2, v2, etc fields to u1, v1, etc before reading new fields to u2, v2, etc
+            call swap_fields_before_reading()
+          end if
+          call readfield_and_compute(ftype, istep, nhrun < 0, itimei, nhfmin, nhfmax, &
+                              time_file, ierror)
+          write (error_unit, fmt="('input data: ',i4,3i3.2)") time_file
+          call input_timer%stop_and_log()
+
+          dur = time_file - itimei
+          ihdiff = dur%hours
+          tf1 = 0.
+          tf2 = 3600.*ihdiff
+          if (nhrun < 0) tf2 = -tf2
+          next_input_step = istep + nsteph*abs(ihdiff)
+
+          tnow = 0.
+        else
+          tnow = tnow + tstep
         end if
-        if (idebug >= 1) then
-          write (iulog, *) "igtype, gparam(8): ", igtype, gparam
+      end if
+      ! Sync before we need the data from previous async read
+      if (use_async_io) then
+        if ((next_input_step == istep .and. nhleft > 0) .or. istep == 0) then
+          !$OMP TASKWAIT
+          ! move all u2 to u1, u3 to u2, etc after reading new fields to u3, v3, etc
+          ! not needed for last step, no further fields needed
+          if (istep > 0) then
+            ! otherwise already written in syncronous read above
+            write (error_unit, fmt="('input data: ',i4,3i3.2)") time_file
+          end if
+          ! just keep reading from the last timestep, no interpolation needed
+          call swap_fields_after_reading()
+          dur = time_file - itimei
+          ihdiff = dur%hours
+          tf1 = 0.
+          tf2 = 3600.*ihdiff
+          if (nhrun < 0) tf2 = -tf2
+          tnow = 0.
+          next_input_step = istep + nsteph*abs(ihdiff)
+
+          itimei = time_file
+          if (next_input_step < nstep) then ! still data needed
+            ! start reading the next fields early, while computations for current fields are still running
+            ! the tasks sets time_file and the new fields, to be swapped after the taskwait above
+            ! Don't let child threads inherit
+            !$OMP TASK &
+            !$OMP SHARED(time_file) &
+            !$OMP FIRSTPRIVATE(idebug,iulog,itimei, next_input_step,nhrun,nhfmin,nhfmax,nsteph) &
+            !$OMP PRIVATE(ierror)
+            if (idebug >= 1) then
+              write(*, *) "Starting async read task for step ", next_input_step, nstep, itimei
+              flush(output_unit)
+            end if
+            call input_timer%start()
+            call readfield_and_compute(ftype, next_input_step, nhrun < 0, itimei, nhfmin, nhfmax, &
+                              time_file, ierror)
+            call input_timer%stop_and_log()
+            !$OMP END TASK
+          end if
+        else
+          ! this is not an IO step
+          tnow = tnow + tstep
         end if
-        if (ierror /= 0) call snap_error_exit(iulog)
-        call input_timer%stop_and_log()
-
-        write (error_unit, fmt="('input data: ',i4,3i3.2)") time_file
-
-        !..compute model level heights
-        call compheight
-        if (bl_definition /= 'get_bl_from_meteo') then
-          call bldp
-        end if
-
-        dur = time_file - itimei
-        ihdiff = dur%hours
-        tf1 = 0.
-        tf2 = 3600.*ihdiff
-        if (nhrun < 0) tf2 = -tf2
-        next_input_step = istep + nsteph*abs(ihdiff)
-
-        tnow = 0.
-      else
-        tnow = tnow + tstep
       end if
 
       tnext = tnow + tstep
+    !..for linear interpolation in time
+      rt1=(tf2-tnow)/(tf2-tf1)
+      rt2=(tnow-tf1)/(tf2-tf1)
 
       if (iendrel == 0 .AND. istep <= nstepr) then
 
         !..release one plume of particles
-
+        call release_timer%start()
         call release(istep, nsteph, tf1, tf2, tnow, ierror)
         npartmax = max(npartmax, npart)
+        call release_timer%stop_and_log()
 
         if (ierror == 0) then
           lstepr = istep
@@ -728,27 +758,25 @@ PROGRAM bsnap
       ! prepare particle functions once before loop
       if (init) then
         call wetdep_init(tstep)
-        call forwrd_init()
         if (use_random_walk) call rwalk_init(tstep)
         init = .FALSE.
       end if
 
       ! plume loop, increase age of all plumes/particles
-      !$OMP PARALLEL DO SCHEDULE(guided) !npl is private by default
       do npl = 1, nplume
         iplume(npl)%ageInSteps = iplume(npl)%ageInSteps + 1
       end do
-      !$OMP END PARALLEL DO
 
       call particleloop_timer%start()
       ! particle loop
-      !$OMP PARALLEL DO PRIVATE(pextra,np,m,out_of_domain) SCHEDULE(guided) REDUCTION(+:total_activity_lost_domain)
+      !$OMP PARALLEL DO PRIVATE(pextra,np,m,out_of_domain) SCHEDULE(auto) &
+      !$OMP REDUCTION(+:total_activity_lost_domain) REDUCTION(MAX:mhmax) REDUCTION(MIN:mhmin)
       part_do: do np = 1, npart
         if (.not.pdata(np)%is_active()) cycle part_do
 
         !..interpolation of boundary layer top, height, precipitation etc.
-        !  creates and save temporary data to pextra%prc, pextra%
-        call posint(pdata(np), tf1, tf2, tnow, pextra)
+        !  creates and save temporary data to pextra%prc, pextra%rmx, pextra%rmy
+        call posint(pdata(np), rt1, rt2, pextra)
 
         !..radioactive decay
         if (idecay == 1) call decay(pdata(np))
@@ -836,6 +864,10 @@ PROGRAM bsnap
           endif
         endif
 
+        if (pdata(np)%is_active()) then
+          if (pdata(np)%hbl > mhmax) mhmax = pdata(np)%hbl
+          if (pdata(np)%hbl < mhmin) mhmin = pdata(np)%hbl
+        end if
       end do part_do
       !$OMP END PARALLEL DO
       call particleloop_timer%stop_and_log()
@@ -848,13 +880,6 @@ PROGRAM bsnap
         call split_particles(split_particle_after_step)
       end if
       npartmax = max(npartmax, npart)
-
-      !$OMP PARALLEL DO REDUCTION(max : mhmax) REDUCTION(min : mhmin)
-      do n = 1, npart
-        if (pdata(n)%hbl > mhmax) mhmax = pdata(n)%hbl
-        if (pdata(n)%hbl < mhmin) mhmin = pdata(n)%hbl
-      enddo
-      !$OMP END PARALLEL DO
 
       !..fields
       ifldout = 0
@@ -899,17 +924,20 @@ PROGRAM bsnap
         if (fldfilX /= fldfilN) then
           fldfilX = fldfilN
           if (fldtype == "netcdf") then
+            !$OMP TASKWAIT
             call initialize_output(fldfilX, itime, ierror)
             if (ierror /= 0) call snap_error_exit(iulog)
           endif
         end if
         if (fldtype == "netcdf" .and. ifldout == 1) then
+          !$OMP TASKWAIT
           call fldout_nc(fldfilX, itimeo, tf1, tf2, tnext, &
                          ierror)
         endif
         if (ierror /= 0) call snap_error_exit(iulog)
       else
         if (fldtype == "netcdf" .and. ifldout == 1) then
+          !$OMP TASKWAIT
           call fldout_nc(fldfilX, itimeo, tf1, tf2, tnext, &
                          ierror)
         endif
@@ -919,6 +947,8 @@ PROGRAM bsnap
 
       call timeloop_timer%stop_and_log()
     end do time_loop
+    !$OMP END SINGLE
+    !$OMP END PARALLEL
 
   if (lstepr < nstep .AND. lstepr < nstepr) then
     write (iulog, *) 'ERROR: Due to space problems the release period was'
@@ -944,6 +974,9 @@ PROGRAM bsnap
   call timeloop_timer%print_accumulated()
   call output_timer%print_accumulated()
   call input_timer%print_accumulated()
+  call metcalc_timer%print_accumulated()
+  call release_timer%print_accumulated()
+  call other_timer%print_accumulated()
   call particleloop_timer%print_accumulated()
   ! b_end
   write (iulog, *) ' SNAP run finished'
@@ -1255,14 +1288,6 @@ contains
         case ('new')
           if (drydep_scheme /= 0 .AND. drydep_scheme /= DRYDEP_SCHEME_NEW) goto 12
           drydep_scheme = DRYDEP_SCHEME_NEW
-#if defined(SNAP_EXPERIMENTAL)
-        case ('emep')
-          if (drydep_scheme /= 0 .AND. drydep_scheme /= DRYDEP_SCHEME_EMEP) goto 12
-          drydep_scheme = DRYDEP_SCHEME_EMEP
-        case ('zhang')
-          if (drydep_scheme /= 0 .AND. drydep_scheme /= DRYDEP_SCHEME_ZHANG) goto 12
-          drydep_scheme = DRYDEP_SCHEME_ZHANG
-#endif
         case ('emerson')
           if (drydep_scheme /= 0 .AND. drydep_scheme /= DRYDEP_SCHEME_EMERSON) goto 12
           drydep_scheme = DRYDEP_SCHEME_EMERSON
@@ -1271,9 +1296,7 @@ contains
           goto 12
         end select
       case ('dry.deposition.save')
-        if (drydep_scheme /= DRYDEP_SCHEME_EMEP .and. &
-            drydep_scheme /= DRYDEP_SCHEME_ZHANG .and. &
-            drydep_scheme /= DRYDEP_SCHEME_EMERSON) then
+        if (drydep_scheme /= DRYDEP_SCHEME_EMERSON) then
           write(error_unit, *) "The drydep scheme is not set to a compatible value, ignoring"
         else
           output_vd = .true.
@@ -1871,9 +1894,6 @@ contains
         call init_meteo_params(nctype, ierror)
         if (ierror /= 0) goto 12
 #if defined(SNAP_EXPERIMENTAL)
-      case ('grid.nctype.leaf_area_index')
-        if (.not. has_value) goto 12
-        read(cinput(pname_start:pname_end), *, err=12) met_params%leaf_area_index
       case ('grid.nctype.z0')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end), *, err=12) met_params%z0
@@ -2009,6 +2029,10 @@ contains
         !..log.file= <'log_file_name'>
         if (.not. has_value) goto 12
         logfile = cinput(pname_start:pname_end)
+      case ('async_io.on')
+        use_async_io = .true.
+      case ('async_io.off')
+        use_async_io = .false.
       case ('debug.off')
         !..debug.off
         idebug = 0
@@ -2312,8 +2336,8 @@ contains
         output_component(k)%to_defined(:s) = temp_defs
         output_component(k)%to_defined(s+1) = run_comp(m)%to_defined
       end block
-      if (def_comp(m)%kwetdep > 0) output_component(k)%has_wetdep = .true.
-      if (def_comp(m)%kdrydep > 0) output_component(k)%has_drydep = .true.
+      if (run_comp(m)%defined%kwetdep > 0) output_component(k)%has_wetdep = .true.
+      if (run_comp(m)%defined%kdrydep > 0) output_component(k)%has_drydep = .true.
       run_comp(m)%defined%to_output = k
     end do
     nocomp = size(output_component)
@@ -2367,9 +2391,7 @@ contains
             def_comp(m)%gravityms
           ierror = 1
         end if
-      elseif (((drydep_scheme == DRYDEP_SCHEME_EMEP) .or. &
-               (drydep_scheme == DRYDEP_SCHEME_EMERSON) .or. &
-               (drydep_scheme == DRYDEP_SCHEME_ZHANG)) .and. &
+      elseif (((drydep_scheme == DRYDEP_SCHEME_EMERSON)) .and. &
               def_comp(m)%kdrydep == 1) then
         ! Check if component has the necessary definitions to compute
         ! the dry deposition
@@ -2408,8 +2430,7 @@ contains
 #else
       call read_largest_landfraction(largest_landfraction_file)
 #endif
-    endif
-
+    end if
     if (itotcomp == 1 .AND. ncomp == 1) itotcomp = 0
 
     if (rmlimit < 0.0) rmlimit = 0.0001
