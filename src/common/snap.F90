@@ -823,6 +823,8 @@ PROGRAM bsnap
 
             ! Interpolate
             if (t_local /= 0) then
+              rt1=(tf2-(tnow+t_local))/(tf2-tf1)
+              rt2=((tnow+t_local)-tf1)/(tf2-tf1)
               call posint(pdata(np), rt1, rt2, pextra)
             endif
 
