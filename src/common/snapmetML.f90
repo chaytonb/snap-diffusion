@@ -51,8 +51,6 @@ module snapmetML
     character(len=80) :: mshf = ''
     character(len=80) :: xsurfstress = ''
     character(len=80) :: ysurfstress = ''
-    character(len=80) :: meanxsurfstress = ''
-    character(len=80) :: meanysurfstress = ''
     character(len=80) :: spec_humid = ''
     character(len=80) :: rel_humid = ''
 

@@ -33,7 +33,7 @@ module allocateFieldsML
       surface_stress, hflux, t2m, z0, &
       ustar, raero, my, nu, &
       total_activity_released, total_activity_lost_domain, total_activity_lost_other, &
-      wscav, wscav_x, wscav_io, cloud_cover, use_async_io, t1_dew, t2_dew, spec_humid, obukhov_l1, obukhov_l2,  & 
+      wscav, wscav_x, wscav_io, cloud_cover, use_async_io, spec_humid, obukhov_l1, obukhov_l2,  & 
       u_star1, u_star2, w_star1, w_star2, rho, rhograd, pressures, rel_humid, tv
   USE snapfilML, only: idata, fdata
   USE snapgrdML, only: ahalf, bhalf, vhalf, alevel, blevel, vlevel, imodlevel, &
@@ -189,14 +189,6 @@ subroutine allocateFields
   IF (AllocateStatus /= 0) ERROR STOP errmsg
 
   ! Extra fields for atmospheric stability
-  ALLOCATE ( t1_dew(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( t2_dew(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( xflux(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( yflux(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( hflux(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( rel_humid(nx,ny), STAT = AllocateStatus)
@@ -337,9 +329,6 @@ subroutine allocateFields
       allocate(aircraft_doserate_threshold_height(nxhr,nyhr), STAT=allocatestatus)
       if (AllocateStatus /= 0) ERROR STOP errmsg
     endif
-  endif
-  if (.true. .and. .not. allocated(t2_abs)) then
-      allocate(t2_abs(nxhr, nyhr, nk), t1_abs(nxhr, nyhr, nk))
   endif
 
   allocate(total_activity_released(ncomp), total_activity_lost_domain(ncomp), &

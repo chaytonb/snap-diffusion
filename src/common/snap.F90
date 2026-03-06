@@ -170,7 +170,7 @@ PROGRAM bsnap
                        ncomp, nocomp, def_comp, nparnum, &
                        time_profile, TIME_PROFILE_BOMB
   USE snapposML, only: irelpos, nrelpos, release_positions
-  USE snapgrdML, only: modleveldump, &
+  USE snapgrdML, only: modleveldump, ivcoor, &
                        klevel, imslp, itotcomp, gparam, &
                        igtype, imodlevel, modlevel_is_average, precipitation_in_output, &
                        alevel, blevel
@@ -823,7 +823,7 @@ PROGRAM bsnap
 
             ! Interpolate
             if (t_local /= 0) then
-              call posint(pdata(np), tf1, tf2, tnow+t_local, pextra)
+              call posint(pdata(np), rt1, rt2, pextra)
             endif
 
             ! Enforce timesteps 1/5 of the vertical lagrangian timescale
@@ -1912,11 +1912,11 @@ contains
       case ('ensemble_member.input')
         read (cinput(pname_start:pname_end), *, err=12) enspos
       case ('data.sigma.levels')
-        write(error_unit, *) "data.sigma.levels is no longer used"
-        warning = .true.
+        !..data.sigma.levels
+        ivcoor = 2
       case ('data.eta.levels')
-        write(error_unit, *) "data.eta.levels is no longer used"
-        warning = .true.
+        !..data.eta.levels
+        ivcoor = 10
       case ('levels.input')
         !..levels.input=<num_levels, 0,kk,k,k,k,....,1>
         !..levels.input=<num_levels, 0,kk,k,k,k,....,18>

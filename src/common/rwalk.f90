@@ -837,7 +837,7 @@ subroutine constant_k_name_above_bl(part, pextra)
 end subroutine constant_k_name_above_bl
 
 subroutine diffusion_fields(u_star, w_star, obukhov_length)
-  use snapfldML, only: ps2, t2m, hbl2, xflux, yflux, hflux, tv
+  use snapfldML, only: ps2, t2m, hbl2, surface_stress, hflux, tv
   use snapdimML, only: nx, ny
   use, intrinsic :: ieee_arithmetic
 
@@ -847,16 +847,13 @@ subroutine diffusion_fields(u_star, w_star, obukhov_length)
 
   real, parameter :: r=287, g=9.81, k=0.4, cpa=1004.6
 
-  real :: stress(nx, ny)
   real :: rho_a(nx, ny)
 
   ! Calculate surface air density
   rho_a = (ps2*100) / (t2m * r)
 
-  stress = HYPOT(xflux, yflux)
-
   ! Calculate friction velocity
-  u_star = sqrt(stress/(rho_a))
+  u_star = sqrt(surface_stress/(rho_a))
 
   ! Calculate the obukhov length. Negative sign removed as ECMWF convention is positive for downward flux
   obukhov_length = rho_a * cpa * t2m * (u_star**3)/(k*g*hflux)

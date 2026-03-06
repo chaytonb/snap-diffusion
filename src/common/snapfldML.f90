@@ -71,12 +71,6 @@ module snapfldML
 !> mean surface heat flux
   real(kind=real32), allocatable, save, public :: mshf(:,:)
 
-!> mean eastward surface stress
-  real(kind=real32), allocatable, save, public :: meanxsurfstress(:,:)
-
-!> mean northward surface stress
-  real(kind=real32), allocatable, save, public :: meanysurfstress(:,:)
-
 !> specific humidity
   real(kind=real32), allocatable, save, public :: spec_humid(:,:,:)
 

@@ -115,6 +115,11 @@ module snapgrdML
 !> * 3=spherical (rotated)
     integer, save, public :: igtype
 
+! vertical coordinate
+!> * 2=sigma (Norlam)
+!> * 10=eta/hybrid   (Hirlam,...))
+    integer, save, public :: ivcoor = 0
+    
 !> table of level numbers for interpolation
 !>
 !> (key is vlevel*10000)

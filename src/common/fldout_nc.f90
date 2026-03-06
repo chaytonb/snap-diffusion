@@ -135,7 +135,7 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, &
   USE snapfldML, only: field_hr1, field_hr2, field_hr3, hbl_hr
   USE snapfldML, only: field1, &
       depdry, depwet, &
-      avgbq1, avgbq2, garea, pmsl1, pmsl2, hbl1, hbl2, &
+      avgbq1, avgbq2, garea, pmsl1, pmsl2, &
       accdry, accwet, avgprec, concen, ps1, ps2, avghbl, &
       concacc, accprec, max_column_concentration, aircraft_doserate, &
       aircraft_doserate_threshold_height, &

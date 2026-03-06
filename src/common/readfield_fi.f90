@@ -55,15 +55,15 @@ contains
     USE iso_fortran_env, only: error_unit
     USE snapfilML, only: iavail, filef, nctype
     USE snapfldML, only: &
-      xm, ym, u_io, v_io, w_io, t_io, ps_io, pmsl_io, &
-      garea, enspos, precip_io, t_abs_io, t2_abs, t1_dew, t2_dew, t2m, spec_humid, xflux, yflux, hflux, rel_humid, tv, &
+      xm, ym, u_io, v_io, w_io, t_io, ps_io, hbl_io, pmsl_io, hbl2, bl2, w2, surface_stress, &
+      garea, enspos, precip_io, t_abs_io, t2_abs, t2m, spec_humid, hflux, rel_humid, tv, &
       u_star1, u_star2, w_star1, w_star2, obukhov_l1, obukhov_l2, rho, rhograd, pressures
-    USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, ptop, &
-                         gparam, klevel, ivlevel, imslp, igtype, ivlayer
+    USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, &
+                         gparam, klevel, ivlevel, imslp, igtype, ivlayer, ivcoor
     USE snapmetML, only: met_params, xy_wind_units, pressure_units, omega_units, &
                          sigmadot_units, temp_units, requires_precip_deaccumulation, &
                          downward_momentum_flux_units, surface_heat_flux_units, &
-                         mass_fraction_units, acc_momentum_flux_units
+                         mass_fraction_units, acc_momentum_flux_units,surface_roughness_length_units
     USE snapdimML, only: nx, ny, nk, output_resolution_factor, hres_field, surface_index
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
@@ -90,19 +90,19 @@ contains
     TYPE(FimexIO) :: fio
     integer, save :: ntav1, ntav2 = 0
     character(len=1024), save :: file_name = ""
+    character(len=1024), save :: ap_units = pressure_units
     logical, save :: first_time_read = .true.
 
     integer :: i, j, k, ilevel, i1, i2
     integer :: nhdiff, nhdiff_precip, prev_tstep_same_file
     real :: alev(nk), blev(nk), dxgrid, dygrid
+    real, allocatable :: xflux(:, :), yflux(:, :)
     integer :: ifb, kfb
     real :: p, px, ptop
     real :: ptoptmp(1)
     real :: dummy_fc(1,1)
 
     integer :: timepos, timeposm1, nr
-
-    allocate(tmp1, tmp2, MOLD=ps2)
 
   ! Calculate new hor
 
@@ -192,17 +192,7 @@ contains
         itimefi, ', prev. position=', timeposm1, ', hours:', nhdiff
     end if
 
-    if (met_params%ptopv /= '') then
-      call fi_checkload(fio, met_params%ptopv, pressure_units, ptop)
-    else
-      ptop = 0.0 ! hPa
-    end if
-    if (met_params%p0 /= '') then
-      call fi_checkload(fio, met_params%p0, pressure_units, p0)
-    else
-      p0 = 1.0
-    end if
-
+    ptop = 100.0
     do k = nk , 2, -1
 
       !..input model level no.
@@ -225,15 +215,18 @@ contains
       !..pot.temp. or abs.temp.
       call fi_checkload(fio, met_params%pottempv, temp_units, t_io(:, :, k), nt=timepos, nz=ilevel, nr=nr)
 
-      if (met_params%apv /= '') then
-        if (met_params%p0 /= '') then
-          call fi_checkload(fio, met_params%apv, "1", alev(k:k), nz=ilevel)
-          alev(k) = alev(k)*p0
-        else
-          call fi_checkload(fio, met_params%apv, pressure_units, alev(k:k), nz=ilevel)
-        end if
+      !   TODO read ptop from file (only needed for sigma), but not in emep data
+      ptop = 100. ! hPa
+      !       if(ivcoor.eq.2) ptop=idata(19)
+      !..p0 for hybrid loaded to ptop, ap is a * p0
+      if (ivcoor /= 2 .AND. .NOT. met_params%ptopv == '') then
+        call fi_checkload(fio, met_params%ptopv, pressure_units, ptoptmp)
+        ptop = ptoptmp(1)
+        ap_units = ""
       end if
-      if (met_params%bv /= '') then
+      !..alevel (here) only for eta levels
+      if (.NOT. met_params%apv == '') then
+        call fi_checkload(fio, met_params%apv, ap_units, alev(k:k), nz=ilevel)
         call fi_checkload(fio, met_params%bv, "", blev(k:k), nz=ilevel)
         if (ivcoor /= 2 .AND. .NOT. met_params%ptopv == '') then
           !..p0 for hybrid loaded to ptop, ap is a * p0
@@ -300,45 +293,74 @@ contains
 
     if (nctype == 'era5') then
   !..model boundary layer height
-      call fi_checkload(fio, met_params%blh, '', hbl2(:, :), nt=timepos, nr=nr, nz=1)
+      call fi_checkload(fio, met_params%blh, surface_roughness_length_units, hbl_io(:, :), nt=timepos, nr=nr)
     endif
 
 !.. Read in 2m air temperature
     call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
 !.. Read in surface stress varaibles
-    if (meteo_type == 'flexextract') then
-      call fi_checkload(fio, met_params%xflux, acc_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr, nz=1)
-      call fi_checkload(fio, met_params%yflux, acc_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr, nz=1)
-      call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr, nz=1)
+    ! if (meteo_type == 'flexextract') then
+    !   call fi_checkload(fio, met_params%xflux, acc_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr, nz=1)
+    !   call fi_checkload(fio, met_params%yflux, acc_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr, nz=1)
+    !   call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr, nz=1)
 
-    else 
-      ! Fluxes are integrated: Deaccumulate
-      if (timepos == 1) then
-        call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr)
+    ! else 
+    !   ! Fluxes are integrated: Deaccumulate
+    !   if (timepos == 1) then
+    !     call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr)
+    !     call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr)
+    !   else
+    !     call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
+    !     call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, tmp2(:, :), nt=timepos, nr=nr)
+    !     xflux(:,:) = tmp2 - tmp1
+
+    !     call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
+    !     call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, tmp2(:, :), nt=timepos, nr=nr)
+    !     yflux(:,:) = tmp2 - tmp1
+    !   endif
+    !   ! TODO: Normalise by difference between intervals
+    !   xflux(:,:) =  xflux / 3600
+    !   yflux(:,:) =  yflux / 3600
+
+    !   if (timepos == 1) then
+    !     call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr)
+    !   else
+    !     call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
+    !     call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, tmp2(:, :), nt=timepos, nr=nr)
+    !     hflux(:,:) = tmp2 - tmp1
+    !   endif
+    !   ! TODO: Normalise by difference between intervals
+    !   hflux(:,:) = hflux / 3600 ! Follow conventions for up/down
+    ! endif
+
+    if (met_params%surface_stress /= "") then
+      ! Load surface_stress
+      call fi_checkload(fio, met_params%surface_stress, downward_momentum_flux_units, surface_stress(:, :), nt=timepos, nr=nr)
+    else if (met_params%xflux == "" .OR. met_params%yflux == "") then
+      ! Either surface_stress or xflux and yflux needs to be defined
+      error stop "Assertion error: Either surface_stress or xflux and yflux needs to be defined in the meteorological parameters"
+    else
+      allocate(xflux, yflux, MOLD=ps_io)
+      ! Load and combine surface stress/momentum flux components
+      if (met_params%xflux_is_accumulated) then
+        ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
+        call read_accumulated_field(fio, nhdiff, timepos, timeposm1, met_params%xflux, downward_momentum_flux_units, xflux(:, :), &
+          nr=nr)
+      else
+        call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, &
+          nr=nr)
+      endif
+
+      if (met_params%yflux_is_accumulated) then
+        ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
+        call read_accumulated_field(fio, nhdiff, timepos, timeposm1, met_params%yflux, downward_momentum_flux_units, yflux(:, :), &
+          nr=nr)
+      else
         call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr)
-      else
-        call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
-        call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, tmp2(:, :), nt=timepos, nr=nr)
-        xflux(:,:) = tmp2 - tmp1
-
-        call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
-        call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, tmp2(:, :), nt=timepos, nr=nr)
-        yflux(:,:) = tmp2 - tmp1
       endif
-      ! TODO: Normalise by difference between intervals
-      xflux(:,:) =  xflux / 3600
-      yflux(:,:) =  yflux / 3600
 
-      if (timepos == 1) then
-        call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr)
-      else
-        call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
-        call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, tmp2(:, :), nt=timepos, nr=nr)
-        hflux(:,:) = tmp2 - tmp1
-      endif
-      ! TODO: Normalise by difference between intervals
-      hflux(:,:) = hflux / 3600 ! Follow conventions for up/down
+      surface_stress = hypot(yflux, xflux)
     endif
 
 !.. Calculate fields required for flexpart diffusion
@@ -382,7 +404,7 @@ contains
 
       ! end initialization
     end if
-
+    
     call metcalc_timer%start()
     if (met_params%temp_is_abs) then
       if (allocated(t2_abs)) t_abs_io(:,:,:) = t_io
