@@ -56,14 +56,15 @@ contains
     USE snapfilML, only: iavail, filef, nctype
     USE snapfldML, only: &
       xm, ym, u_io, v_io, w_io, t_io, ps_io, hbl_io, pmsl_io, hbl2, bl2, w2, surface_stress, &
-      garea, enspos, precip_io, t_abs_io, t2_abs, t2m, spec_humid, hflux, rel_humid, tv, &
-      u_star1, u_star2, w_star1, w_star2, obukhov_l1, obukhov_l2, rho, rhograd, pressures
+      garea, enspos, precip_io, t_abs_io, t2_abs, t2m, spec_humid, hflux, rel_humid, &
+      u_star2, w_star2, obukhov_l2, bl_io
     USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, &
                          gparam, klevel, ivlevel, imslp, igtype, ivlayer, ivcoor
     USE snapmetML, only: met_params, xy_wind_units, pressure_units, omega_units, &
                          sigmadot_units, temp_units, requires_precip_deaccumulation, &
                          downward_momentum_flux_units, surface_heat_flux_units, &
-                         mass_fraction_units, acc_momentum_flux_units,surface_roughness_length_units
+                         mass_fraction_units, acc_momentum_flux_units,surface_roughness_length_units, &
+                         accum_surface_heat_flux_units, surface_heat_flux_units
     USE snapdimML, only: nx, ny, nk, output_resolution_factor, hres_field, surface_index
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
@@ -300,39 +301,11 @@ contains
     call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
 !.. Read in surface stress varaibles
-    ! if (meteo_type == 'flexextract') then
-    !   call fi_checkload(fio, met_params%xflux, acc_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr, nz=1)
-    !   call fi_checkload(fio, met_params%yflux, acc_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr, nz=1)
-    !   call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr, nz=1)
-
-    ! else 
-    !   ! Fluxes are integrated: Deaccumulate
-    !   if (timepos == 1) then
-    !     call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, nr=nr)
-    !     call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr)
-    !   else
-    !     call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
-    !     call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, tmp2(:, :), nt=timepos, nr=nr)
-    !     xflux(:,:) = tmp2 - tmp1
-
-    !     call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
-    !     call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, tmp2(:, :), nt=timepos, nr=nr)
-    !     yflux(:,:) = tmp2 - tmp1
-    !   endif
-    !   ! TODO: Normalise by difference between intervals
-    !   xflux(:,:) =  xflux / 3600
-    !   yflux(:,:) =  yflux / 3600
-
-    !   if (timepos == 1) then
-    !     call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, hflux(:, :), nt=timepos, nr=nr)
-    !   else
-    !     call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, tmp1(:, :), nt=timeposm1, nr=nr)
-    !     call fi_checkload(fio, met_params%hflux, surface_heat_flux_units, tmp2(:, :), nt=timepos, nr=nr)
-    !     hflux(:,:) = tmp2 - tmp1
-    !   endif
-    !   ! TODO: Normalise by difference between intervals
-    !   hflux(:,:) = hflux / 3600 ! Follow conventions for up/down
-    ! endif
+    if (meteo_type == 'flexextract') then
+      met_params%xflux_is_accumulated = .false.
+      met_params%yflux_is_accumulated = .false.
+      met_params%hflux_is_accumulated = .false.
+    endif
 
     if (met_params%surface_stress /= "") then
       ! Load surface_stress
@@ -345,8 +318,8 @@ contains
       ! Load and combine surface stress/momentum flux components
       if (met_params%xflux_is_accumulated) then
         ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
-        call read_accumulated_field(fio, nhdiff, timepos, timeposm1, met_params%xflux, downward_momentum_flux_units, xflux(:, :), &
-          nr=nr)
+        call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%xflux, downward_momentum_flux_units, &
+          xflux(:, :), nr=nr)
       else
         call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, &
           nr=nr)
@@ -354,8 +327,8 @@ contains
 
       if (met_params%yflux_is_accumulated) then
         ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
-        call read_accumulated_field(fio, nhdiff, timepos, timeposm1, met_params%yflux, downward_momentum_flux_units, yflux(:, :), &
-          nr=nr)
+        call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%yflux, downward_momentum_flux_units, &
+          yflux(:, :), nr=nr)
       else
         call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr)
       endif
@@ -363,9 +336,14 @@ contains
       surface_stress = hypot(yflux, xflux)
     endif
 
-!.. Calculate fields required for flexpart diffusion
-    call air_density(rho, rhograd, pressures, tv)
-    call diffusion_fields(u_star2, w_star2, obukhov_l2)
+    ! Read in hflux
+    if (met_params%hflux_is_accumulated) then
+      call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%hflux, accum_surface_heat_flux_units, &
+        hflux(:, :), nr=nr)
+    else
+      call fi_checkload(fio, met_params%hflux, '', hflux(:, :), nt=timepos, nr=nr)
+    endif
+
 
     if (first_time_read) then
       call compute_vertical_coords(alev, blev, ptop)
@@ -434,13 +412,12 @@ contains
     call compheight
     
     if (bl_definition == 'get_bl_from_meteo') then
-      call convert_hbl_to_vbl(hbl2, bl2)
+      call convert_hbl_to_vbl(hbl_io, bl_io)
     endif
-    
+
     if (met_params%sigmadot_is_omega) then
       !..omega -> etadot, or rather etadot derived from continuity-equation (mean of both)
-      ! call om2edot
-      call pressure_to_eta(w2)
+      call om2edot
     else if (met_params%sigmadotv == '') then
       !..omega -> etadot, or rather etadot derived from continuity-equation
       call om2edot
@@ -448,6 +425,7 @@ contains
       w_io = 2.0*w_io
     end if
     call metcalc_timer%stop_and_log()
+
 
 !..sigma_dot/eta_dot 0 at surface
     w_io(:, :, 1) = 0.0

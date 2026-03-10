@@ -229,7 +229,7 @@ end subroutine rwalk
 
 subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FLEXPART code, turbswitch FALSE
   USE particleML, only: extraParticle, Particle
-  use snapfldML, only: rho, rhograd
+  use snapfldML, only: rho, rhograd, ps2, t2m, hbl2, surface_stress, hflux, tv
   USE snapgrdML, only: ivlayer
   
   !> particle with information
@@ -477,6 +477,7 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   real :: dttlu, dttlv, dttlw
   real :: dsigwdz
 
+
   ! Dimensionless height 
   if (turb_homogeneous) then ! Take middle BL value if homogeneous
     scaled_height = 0.5
@@ -488,7 +489,7 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   c = 2 ! constant, values for this disagree. 3 from Sawford
   wst = pextra%wst
   ust = pextra%ust
-  
+
   ! Case 1, Stable Conditions
   if (pextra%ol.gt.0.) then
     sigu=2.*ust*(1.-scaled_height) 
@@ -649,6 +650,8 @@ subroutine variable_k_name_within_bl(part, pextra)
   c = 2 ! constant, values for this disagree. 3 from Sawford
   wst = pextra%wst
   ust = pextra%ust
+
+  ! write(*,*) ust, wst, pextra%ol
   
   ! Case 1, Stable Conditions
   if (pextra%ol.gt.0.) then
@@ -836,14 +839,10 @@ subroutine constant_k_name_above_bl(part, pextra)
   
 end subroutine constant_k_name_above_bl
 
-subroutine diffusion_fields(u_star, w_star, obukhov_length)
-  use snapfldML, only: ps2, t2m, hbl2, surface_stress, hflux, tv
+subroutine diffusion_fields
+  use snapfldML, only: ps2, t2m, hbl2, surface_stress, hflux, tv, obukhov_l_io, u_star_io, w_star_io
   use snapdimML, only: nx, ny
   use, intrinsic :: ieee_arithmetic
-
-  real, intent(out) :: u_star(:, :)
-  real, intent(out) :: w_star(:, :)
-  real, intent(out) :: obukhov_length(:, :)
 
   real, parameter :: r=287, g=9.81, k=0.4, cpa=1004.6
 
@@ -853,35 +852,30 @@ subroutine diffusion_fields(u_star, w_star, obukhov_length)
   rho_a = (ps2*100) / (t2m * r)
 
   ! Calculate friction velocity
-  u_star = sqrt(surface_stress/(rho_a))
+  u_star_io = sqrt(surface_stress/(rho_a))
 
   ! Calculate the obukhov length. Negative sign removed as ECMWF convention is positive for downward flux
-  obukhov_length = rho_a * cpa * t2m * (u_star**3)/(k*g*hflux)
+  obukhov_l_io = rho_a * cpa * t2m * (u_star_io**3)/(k*g*hflux)
 
   ! Calculate the convective velocity scale, p.622/118 stull
   ! surface kinematic heat flux = H0/(rho*cpa)
   if (bl_definition == 'constant') then
     hbl2=600
   endif
-  w_star = ((g*hbl2*-hflux)/(tv(:,:,2)*rho_a*cpa))**0.333
+  w_star_io = ((g*hbl2*-hflux)/(tv(:,:,2)*rho_a*cpa))**0.333
 
-  where (ieee_is_nan(w_star))
-    w_star = 0.0
+  where (ieee_is_nan(w_star_io))
+    w_star_io = 0.0
   end where
 
 end subroutine diffusion_fields
 
-subroutine air_density(rho, rhograd, pressures, tv)
-  use snapfldML, only: spec_humid, ps2, hlevel2, t2
+subroutine air_density
+  use snapfldML, only: spec_humid, ps2, hlevel2, t2, rho, rhograd, pressures, tv
   use snapdimML, only: nx, ny, nk
   use snapgrdML, only: alevel, blevel, ivlayer
 
   real, parameter :: r = 287.0
-
-  real, intent(out) :: rho(:, :, :)
-  real, intent(out) :: rhograd(:, :, :)
-  real, intent(out) :: pressures(:, :, :)
-  real, intent(out) :: tv(:,:,:)
 
   integer :: i, j, k
 

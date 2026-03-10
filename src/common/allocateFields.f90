@@ -33,8 +33,8 @@ module allocateFieldsML
       surface_stress, hflux, t2m, z0, &
       ustar, raero, my, nu, &
       total_activity_released, total_activity_lost_domain, total_activity_lost_other, &
-      wscav, wscav_x, wscav_io, cloud_cover, use_async_io, spec_humid, obukhov_l1, obukhov_l2,  & 
-      u_star1, u_star2, w_star1, w_star2, rho, rhograd, pressures, rel_humid, tv
+      wscav, wscav_x, wscav_io, cloud_cover, use_async_io, spec_humid, obukhov_l1, obukhov_l2, obukhov_l_io,  & 
+      u_star1, u_star2, u_star_io, w_star1, w_star2, w_star_io, rho, rhograd, pressures, rel_humid, tv
   USE snapfilML, only: idata, fdata
   USE snapgrdML, only: ahalf, bhalf, vhalf, alevel, blevel, vlevel, imodlevel, &
       compute_column_max_conc, compute_aircraft_doserate, aircraft_doserate_threshold
@@ -117,6 +117,36 @@ subroutine allocateFields
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( hlayer2(nxhr,nyhr,nk), STAT = AllocateStatus)
 
+  ! Extra fields for atmospheric stability
+  ALLOCATE ( hflux(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( rel_humid(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( t2m(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( spec_humid(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( w_star1(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( w_star2(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( u_star1(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( u_star2(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( obukhov_l1(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( obukhov_l2(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( rho(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( rhograd(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( pressures(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( tv(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+
   IF (use_async_io) then
     ALLOCATE ( u3(nx,ny,nk), STAT = AllocateStatus)
     IF (AllocateStatus /= 0) ERROR STOP errmsg
@@ -156,6 +186,9 @@ subroutine allocateFields
     hbl_io => hbl2
     hlevel_io => hlevel2
     hlayer_io => hlayer2
+    u_star_io => u_star2
+    obukhov_l_io => obukhov_l2
+    w_star_io => w_star2
   END IF
 
   ALLOCATE ( idata(ldata), STAT = AllocateStatus)
@@ -188,35 +221,6 @@ subroutine allocateFields
   ALLOCATE ( field3d1(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
 
-  ! Extra fields for atmospheric stability
-  ALLOCATE ( hflux(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( rel_humid(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( t2m(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( spec_humid(nx,ny,nk), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( w_star1(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( w_star2(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( u_star1(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( u_star2(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( obukhov_l1(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( obukhov_l2(nx,ny), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( rho(nx,ny,nk), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( rhograd(nx,ny,nk), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( pressures(nx,ny,nk), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( tv(nx,ny,nk), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
 
   ALLOCATE ( pmsl1(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
@@ -383,6 +387,10 @@ subroutine deAllocateFields
   DEALLOCATE ( hbl1)
   DEALLOCATE ( hlevel1)
   DEALLOCATE ( hlayer1)
+  DEALLOCATE ( obukhov_l1)
+  DEALLOCATE ( u_star1)
+  DEALLOCATE ( w_star1)
+
 
   DEALLOCATE ( u2)
   DEALLOCATE ( v2)
@@ -393,6 +401,9 @@ subroutine deAllocateFields
   DEALLOCATE ( hbl2)
   DEALLOCATE ( hlevel2)
   DEALLOCATE ( hlayer2)
+  DEALLOCATE ( obukhov_l2)
+  DEALLOCATE ( u_star2)
+  DEALLOCATE ( w_star2)
 
   if (allocated(u3)) then
     DEALLOCATE ( u3)

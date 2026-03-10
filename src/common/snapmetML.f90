@@ -222,8 +222,11 @@ module snapmetML
       met_params%dewtemp2m = 'dew_point_temperature_2m'
       met_params%blh = 'boundary_layer_height'
       met_params%hflux = 'surface_upward_sensible_heat_flux_acc'
+      met_params%hflux_is_accumulated = .true.
       met_params%xflux = 'eastward_surface_stress'
+      met_params%xflux_is_accumulated = .true.
       met_params%yflux = 'northward_surface_stress'
+      met_params%yflux_is_accumulated = .true.
       met_params%t2m = 'air_temperature_2m'
       met_params%spec_humid = 'specific_humidity_ml'
 
@@ -256,8 +259,11 @@ module snapmetML
       met_params%precstratiaccumv = ''
       met_params%precconaccumv = ''
       met_params%hflux = 'sshf'
+      met_params%hflux_is_accumulated = .true.
       met_params%xflux = 'tisemf'
+      met_params%xflux_is_accumulated = .true.
       met_params%yflux = 'tisnmf'
+      met_params%yflux_is_accumulated = .true.
       met_params%rel_humid = 'relative_humidity_2m'
       met_params%t2m = 'air_temperature_2m'
       met_params%spec_humid = 'specific_humidity_ml'

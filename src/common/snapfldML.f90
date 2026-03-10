@@ -86,17 +86,32 @@ module snapfldML
 !> virtual temperature
   real(kind=real32), allocatable, save, public :: tv(:,:,:)
 
-!> MO length (diffusion)
-  real(kind=real32), allocatable, save, public :: obukhov_l1(:,:)
-  real(kind=real32), allocatable, save, public :: obukhov_l2(:,:)
+!> obukhov length in metres (time step 1)
+  real(kind=real32), allocatable, target, save, public :: obukhov_l1(:,:)
+!> obukhov length in metres (time step 2)
+  real(kind=real32), allocatable, target, save, public :: obukhov_l2(:,:)
+!> obukhov length in metres (time step 3)
+  real(kind=real32), allocatable, target, save, public :: obukhov_l3(:,:)
+!> obukhov length in metres in meters io
+  real(kind=real32), pointer , public :: obukhov_l_io(:,:)
 
-!> friction velocity
-  real(kind=real32), allocatable, save, public :: u_star1(:,:)
-  real(kind=real32), allocatable, save, public :: u_star2(:,:)
+!> friction velocity (time step 1)
+  real(kind=real32), allocatable, target, save, public :: u_star1(:,:)
+!> friction velocity (time step 2)
+  real(kind=real32), allocatable, target, save, public :: u_star2(:,:)
+!> friction velocity (time step 3)
+  real(kind=real32), allocatable, target, save, public :: u_star3(:,:)
+!> friction velocity in meters io
+  real(kind=real32), pointer , public :: u_star_io(:,:)
 
-!> deardorff velocity
-  real(kind=real32), allocatable, save, public :: w_star1(:,:)
-  real(kind=real32), allocatable, save, public :: w_star2(:,:)
+!> deardorff velocity (time step 1)
+  real(kind=real32), allocatable, target, save, public :: w_star1(:,:)
+!> deardorff velocity (time step 2)
+  real(kind=real32), allocatable, target, save, public :: w_star2(:,:)
+!> deardorff velocity (time step 3)
+  real(kind=real32), allocatable, target, save, public :: w_star3(:,:)
+!> deardorff velocity in meters io
+  real(kind=real32), pointer , public :: w_star_io(:,:)
 
 !> hourly precipitation intensity (mm/hour)
   real(kind=real32), allocatable, target, save, public :: precip(:,:)
@@ -391,6 +406,12 @@ module snapfldML
       bl_io => bl2
       call swap_2_fields_2d(hbl1, hbl2)
       hbl_io => hbl2
+      call swap_2_fields_2d(u_star1, u_star2)
+      u_star_io => u_star2
+      call swap_2_fields_2d(w_star1, w_star2)
+      w_star_io => w_star2
+      call swap_2_fields_2d(obukhov_l1, obukhov_l2)
+      obukhov_l_io => obukhov_l2
     end if
   end subroutine swap_fields_before_reading
 

@@ -48,6 +48,7 @@ module readfieldML
     USE datetime, only: datetime_t
     USE snapdebug, only: iulog, idebug
     USE snapgrdML, only: gparam, igtype
+    USE rwalkML, only: diffusion_fields, air_density
 
     USE iso_fortran_env, only: error_unit
 !> file type (netcdf or fimex)
@@ -81,6 +82,11 @@ module readfieldML
     call compheight
     !..calculate boundary layer (top and height)
     call bldp
+
+!.. Calculate fields required for advanced diffusion
+    call air_density
+    call diffusion_fields
+
   end subroutine readfield_and_compute
 
 end module readfieldML
