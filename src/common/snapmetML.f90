@@ -54,6 +54,7 @@ module snapmetML
     character(len=80) :: spec_humid = ''
     character(len=80) :: rel_humid = ''
 
+    character(len=80) :: tke = ''
     character(len=80) :: t2m = ''
     character(len=80) :: yflux = ''
     character(len=80) :: xflux = ''
@@ -111,6 +112,8 @@ module snapmetML
 
   character(len=*), parameter, public :: cloud_fraction_units = '%'
   character(len=*), parameter, public :: mass_fraction_units = 'kg/kg'
+
+  character(len=*), parameter, public :: tke_units = 'J/kg'
 
   public :: init_meteo_params, requires_precip_deaccumulation
 
@@ -267,6 +270,7 @@ module snapmetML
       met_params%rel_humid = 'relative_humidity_2m'
       met_params%t2m = 'air_temperature_2m'
       met_params%spec_humid = 'specific_humidity_ml'
+      met_params%tke = 'TKE_pl'
 
       
 !..get grid parameters from field identification

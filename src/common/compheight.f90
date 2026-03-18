@@ -19,7 +19,7 @@ module compheightML
 !>   - lower model level is level 2
 subroutine compheight()
   USE snapgrdML, only: ahalf, bhalf, alevel, blevel
-  USE snapfldML, only: ps_io, hlayer_io, hlevel_io, t_io
+  USE snapfldML, only: ps_io, hlayer_io, hlevel_io, t_io, hinterf
   USE snapfldML, only: hlayer => field3d1
   USE snaptabML, only: g, exner
   USE snapdimML, only: nx,ny,nk,hres_field
@@ -56,6 +56,18 @@ subroutine compheight()
 
         hlev(i,j) = h2
         pihl(i,j) = pih
+      end do
+    end do
+  end do
+
+  ! Compute interface heights
+  do j = 1, ny
+    do i = 1, nx
+      ! First interface (surface)
+      hinterf(i, j, 1) = 0.0
+      ! Remaining interfaces
+      do k = 2, nk+1
+        hinterf(i, j, k) = hinterf(i, j, k-1) + hlayer(i, j, k-1)
       end do
     end do
   end do

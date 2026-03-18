@@ -74,6 +74,15 @@ module snapfldML
 !> specific humidity
   real(kind=real32), allocatable, save, public :: spec_humid(:,:,:)
 
+!> tke on pressure levels
+  real(kind=real32), allocatable, save, public :: tke(:,:,:)
+
+!> tke on hybrid levels
+  real(kind=real32), allocatable, save, public :: tke_hyb(:,:,:)
+
+!> heights of model layer inferfaces (metres)
+  real(kind=real32), allocatable, save, public :: hinterf(:,:,:)
+
 !> density of air
   real(kind=real32), allocatable, save, public :: rho(:,:,:)
 

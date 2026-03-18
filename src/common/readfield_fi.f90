@@ -57,7 +57,7 @@ contains
     USE snapfldML, only: &
       xm, ym, u_io, v_io, w_io, t_io, ps_io, hbl_io, pmsl_io, hbl2, bl2, w2, surface_stress, &
       garea, enspos, precip_io, t_abs_io, t2_abs, t2m, spec_humid, hflux, rel_humid, &
-      u_star2, w_star2, obukhov_l2, bl_io
+      u_star2, w_star2, obukhov_l2, bl_io, tke
     USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, &
                          gparam, klevel, ivlevel, imslp, igtype, ivlayer, ivcoor
     USE snapmetML, only: met_params, xy_wind_units, pressure_units, omega_units, &
@@ -69,7 +69,7 @@ contains
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
-    USE rwalkML, only: bl_definition, diffusion_fields, air_density, meteo_type
+    USE rwalkML, only: bl_definition, diffusion_fields, air_density, meteo_type, diffusion_scheme
     USE compheightML, only: compheight
 !> current timestep (always positive), negative istep means reset
     integer, intent(in) :: istep
@@ -344,6 +344,10 @@ contains
       call fi_checkload(fio, met_params%hflux, '', hflux(:, :), nt=timepos, nr=nr)
     endif
 
+    ! Read in TKE
+    if (diffusion_scheme=='TKE') then
+      call fi_checkload(fio, met_params%tke, '', tke(:, :, :), nt=timepos, nr=nr)
+    endif
 
     if (first_time_read) then
       call compute_vertical_coords(alev, blev, ptop)
@@ -1192,7 +1196,9 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
 
       vbl(i, j) = bl_top_pressure / ps2(i, j)
 
-      ! vbl(i,j) = 600
+      ! Enforce minimum and maximum limits on vbl
+      if (vbl(i, j) < 50.0) vbl(i, j) = 50.0
+      if (vbl(i, j) > 2000.0) vbl(i, j) = 2000.0
 
     end do
   end do

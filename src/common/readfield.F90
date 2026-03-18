@@ -48,7 +48,7 @@ module readfieldML
     USE datetime, only: datetime_t
     USE snapdebug, only: iulog, idebug
     USE snapgrdML, only: gparam, igtype
-    USE rwalkML, only: diffusion_fields, air_density
+    USE rwalkML, only: diffusion_fields, air_density, interp_tke_to_hybrid_field
 
     USE iso_fortran_env, only: error_unit
 !> file type (netcdf or fimex)
@@ -86,6 +86,7 @@ module readfieldML
 !.. Calculate fields required for advanced diffusion
     call air_density
     call diffusion_fields
+    call interp_tke_to_hybrid_field
 
   end subroutine readfield_and_compute
 

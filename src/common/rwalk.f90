@@ -16,7 +16,7 @@
 ! along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 module rwalkML
-  USE iso_fortran_env, only: real64
+  USE iso_fortran_env, only: real64, int32
 
   implicit none
   private
@@ -36,8 +36,8 @@ module rwalkML
   real(real64), parameter :: entrainment = 0.1 ! Entrainment zone = 10%*h
 
   ! Values for random number generation
-  integer, parameter :: max_rands=6000000
-  integer :: nrand=1
+  integer(int32), parameter :: max_rands=6000000
+  integer(int32) :: nrand=1
   real :: rands(max_rands) ! initialise array to store random numbers
 
   real(real64), save, public :: a_in_bl = 0.5
@@ -50,7 +50,7 @@ module rwalkML
   character(len=64), save, public :: record_stats = ''
   character(len=64), save, public :: entrainment_scheme = ''
 
-  public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres
+  public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres, interp_tke_to_hybrid_field
 
   contains
 
@@ -70,8 +70,8 @@ subroutine rwalk_init(timestep)
   ! l-eta above mixing height
   vrdbla = labove*tsqrtfactor_v
 
-  if (diffusion_scheme=='random_walk_flexpart' .OR. diffusion_scheme=='random_walk_name' .OR. &
-      diffusion_scheme=='variable_k' .OR. diffusion_scheme=='constant_k') then
+  ! If diffusion scheme not default SNAP, then generate normally distributed random nums
+  if (diffusion_scheme /= '') then
     call generate_normal_randoms(rands, max_rands)
   endif
 
@@ -136,6 +136,10 @@ subroutine turbulence_master(blfullmix,part,pextra)
       call constant_k_name_above_bl(part, pextra)
       call metres_to_eta(part, pextra)
     endif
+  elseif (diffusion_scheme == 'TKE') then
+    call eta_to_metres(part, pextra)
+    call tke_diffusion(part, pextra)
+    call metres_to_eta(part, pextra)
   else 
     call rwalk(blfullmix, part, pextra)
   endif
@@ -650,8 +654,6 @@ subroutine variable_k_name_within_bl(part, pextra)
   c = 2 ! constant, values for this disagree. 3 from Sawford
   wst = pextra%wst
   ust = pextra%ust
-
-  ! write(*,*) ust, wst, pextra%ol
   
   ! Case 1, Stable Conditions
   if (pextra%ol.gt.0.) then
@@ -788,7 +790,7 @@ subroutine constant_k_name_within_bl(part, pextra)
 
   integer :: hor_diffu=5300
   real :: top_entrainment=0.03
-  real(real64) :: rnd(1)
+  real :: rnd(1)
   real :: mixing_top
 
   mixing_top = part%hbl + part%hbl*top_entrainment
@@ -838,6 +840,246 @@ subroutine constant_k_name_above_bl(part, pextra)
   part%zmetres = part%zmetres+delz
   
 end subroutine constant_k_name_above_bl
+
+subroutine tke_diffusion(part, pextra)
+  USE particleML, only: extraParticle, Particle
+  USE snapfldML, only: tke_hyb, rho, rhograd, t2, pressures, hlevel2
+  USE snapgrdML, only: ivlayer
+  USE snapdimML, only: nk
+  use, intrinsic :: ieee_arithmetic
+
+  type(Particle), intent(inout)  :: part
+  type(extraParticle), intent(inout) :: pextra
+
+  integer :: i, j, k, kp, part_vert_index
+  real :: sigu, sigv, sigw
+  real :: tke_z, yl, yl_up, yl_down, sum, e1, part_z
+  real :: tlu, tlv, tlw
+  real :: ru, rv, rw
+  real :: delz, dt, rhoaux
+  real :: dttlw
+  real :: pttprof(nk), pttrefprof(nk)
+  integer :: indz, indzp
+  real :: r, cp, g, part_z_init
+
+  ! Physical constants
+  r = 287.0
+  cp = 1004.0
+  g = 9.81
+
+  i = part%x
+  j = part%y
+  part_vert_index = int(part%z * 10000)
+  k = ivlayer(part_vert_index)
+  dt = part%ptstep
+  part_z = part%zmetres
+  part_z_init = part%zmetres
+
+  call calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu, tlv, tlw)
+
+  part%tlw = tlw
+
+  ! Density correction (use grad at k+1, avoid first layer)
+  rhoaux = rhograd(i, j, min(k+1, nk)) / rho(i, j, min(k+1, nk))
+
+  dttlw = dt/tlw
+
+  if (nrand+2.gt.max_rands) nrand=1
+
+  ! Vertical turbulence
+  if (dttlw.lt..5) then
+      part%turbvelw = (1.-dttlw)*part%turbvelw+rands(nrand)*sqrt(2.*dttlw)+dt*rhoaux*sigw
+  else
+      rw = exp(-dttlw)
+      part%turbvelw = rw*part%turbvelw+rands(nrand)*sqrt(1.-rw**2)+tlw*(1.-rw)*rhoaux*sigw
+  end if
+
+  delz = part%turbvelw * sigw * dt
+
+  call vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, sigw, part%turbvelw, delz)
+
+  part%zmetres = part_z
+
+  ! Horizontal turbulence
+  ru = exp(-dt / tlu)
+  rv = exp(-dt / tlv)
+  part%turbvelu = ru * part%turbvelu + rands(nrand+1) * sqrt(1.0 - ru**2) * sigu
+  part%turbvelv = rv * part%turbvelv + rands(nrand+2) * sqrt(1.0 - rv**2) * sigv
+
+  part%x = part%x + part%turbvelu * dt * pextra%rmx
+  part%y = part%y + part%turbvelv * dt * pextra%rmy
+
+  nrand = nrand + 3
+
+end subroutine tke_diffusion
+
+subroutine vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, sigw, part_turbvelw, delz)
+
+  USE snapfldML, only: hlevel2, hlayer2, hinterf
+  USE snapgrdML, only: ivlayer
+  USE snapdimML, only: nk
+  use, intrinsic :: ieee_arithmetic
+
+  ! Arguments:
+  integer, intent(in) :: i, j
+  integer, intent(inout) :: k
+  real, intent(inout) :: tlu, tlv, sigu, sigv, sigw, tlw
+  real(4), intent(inout) :: part_z, delz
+  real(8), intent(inout) :: part_turbvelw
+
+  integer :: indz_c, indzp_c, dir, ind, part_vert_index, k_c, interface_ind, num_loops=1
+  real :: z_bot, z_top, z_bot_next, z_top_next, eps
+  real :: ts, ratio, sigw_c, tlw_c
+  real :: rnd(1)
+  logical :: reflect
+  real :: zt_tmp
+
+  eps = 1e-6 ! Small value to avoid boundary issues
+
+  call random_number(rnd)
+
+  do
+    ! Calculate layer boundaries
+    z_bot = hinterf(i,j,k)
+    z_top = hinterf(i,j,k+1)
+
+    ! Temp fix, ivlevel (eta) indexing doesn't exactly line up with hlevel (m)
+    part_z = max(z_bot, part_z)
+    part_z = min(z_top, part_z)
+
+    ! Calculate time scale and adjust displacement
+    ts = delz / (part_turbvelw * sigw)
+
+    ! Determine if crossing will occur
+    if (part_z + delz < z_bot) then
+      k_c = k - 1
+      dir = -1
+    else if (part_z + delz > z_top) then
+      if (k == nk) then
+        part_z = hlevel2(i,j,nk-1)
+        exit
+      end if
+      k_c = k + 1
+      dir = 1
+
+    else
+      part_z = part_z + delz
+      exit
+    end if
+
+    reflect = .false.
+
+    ! Find time until particle reaches boundary
+    ! Also set particle to interface height
+    if (dir == 1) then
+      ts = ts * (1 - ((z_top - part_z) / delz))
+      part_z = z_top
+    else 
+      ts = ts * (1 - ((z_bot - part_z) / delz))
+      part_z = z_bot
+    endif
+
+    ! Handle model boundary reflection
+    if (k == 1 .AND. dir == -1) then
+      reflect = .true.
+    else
+      ! Update turbulence parameters for new layer
+      call calc_turb_params_tke(i, j, k_c, sigu, sigv, sigw_c, tlu, tlv, tlw_c)
+
+      ! Compute transmission probability
+      ! If next layer is more or equally turbulent then transfer
+      ! If next layer is less turbulent, have probability of transfer
+      ratio = sigw_c / sigw
+
+      ! Draw random number for transmission
+      if (rnd(1) >= ratio) reflect = .true.
+
+    end if
+
+    ! Apply reflection or transmission
+    if (reflect) then
+      part_turbvelw = -part_turbvelw
+    else
+      sigw = sigw_c
+      k = k_c
+      tlw = tlw_c
+    end if
+
+    delz = part_turbvelw * sigw * ts
+
+  end do
+
+end subroutine vertical_reflection_step
+
+subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
+
+  USE particleML, only: extraParticle, Particle
+  USE snapfldML, only: tke_hyb, rho, rhograd, t2, pressures, hlevel2
+  USE snapgrdML, only: ivlayer
+  USE snapdimML, only: nk
+
+  integer, intent(in) :: i, j, k
+  real, intent(inout) :: tlu, tlv, tlw, sigu, sigv, sigw
+
+  integer :: kp, part_vert_index
+  real :: tke_z, yl, yl_up, yl_down, sum, e1
+  real :: ru, rv, rw
+  real :: delz, dt, rhoaux
+  real :: pttprof(nk), pttrefprof(nk)
+  integer :: indz, indzp
+  real :: r, cp, g
+
+  do kp = 1, nk
+     pttprof(kp) = t2(i, j, kp)
+     ! Reference profile: use local value, should try to use domain average?
+     pttrefprof(kp) = pttprof(kp)
+  end do
+
+  indz = k
+  indzp = min(k+1, nk)
+
+  tke_z = tke_hyb(i, j, k)
+
+  ! Compute BL89 mixing length
+  e1 = -g / pttrefprof(indz) * (pttprof(indz) - pttprof(indzp)) * (hlevel2(i, j, indzp) - hlevel2(i, j, indz))
+  if (e1 >= tke_z) then
+    yl = hlevel2(i, j, indzp) - hlevel2(i, j, indz)
+  else
+    ! Upward
+    sum = 0.0
+    kp = indzp
+    do while (kp < nk)
+      sum = sum - (g / pttrefprof(kp) * (pttprof(indz) - pttprof(kp)) * (hlevel2(i, j, kp) - hlevel2(i, j, kp-1)))
+      if (sum >= tke_z) exit
+      kp = kp + 1
+    end do
+    yl_up = hlevel2(i, j, kp) - hlevel2(i, j, indz)
+    ! Downward
+    sum = 0.0
+    kp = indz
+    do while (kp > 2)
+      sum = sum - (g / pttrefprof(kp) * (pttprof(kp) - pttprof(indzp)) * (hlevel2(i, j, kp+1) - hlevel2(i, j, kp)))
+      if (sum >= tke_z) exit
+      kp = kp - 1
+    end do
+    yl_down = hlevel2(i, j, indzp) - hlevel2(i, j, kp)
+    yl = ((yl_up**(-2.0/3.0) + yl_down**(-2.0/3.0))/2.0)**(-3.0/2.0)
+  end if
+
+  ! 3D Turbulent velocity scales (assuming isotropic for now)
+  sigu = sqrt(2.0 * tke_z / 3.0)
+  sigv = sqrt(2.0 * tke_z / 3.0)
+  sigw = sqrt(2.0 * tke_z / 3.0)
+
+  ! Timescales
+  tlu = 2.0 * yl / max(sigu, 1e-6)
+  tlv = 2.0 * yl / max(sigv, 1e-6)
+  tlw = 2.0 * yl / max(sigw, 1e-6)
+  tlu = max(10.0, tlu)
+  tlv = max(10.0, tlv)
+  tlw = max(30.0, tlw)
+
+end subroutine calc_turb_params_tke
 
 subroutine diffusion_fields
   use snapfldML, only: ps2, t2m, hbl2, surface_stress, hflux, tv, obukhov_l_io, u_star_io, w_star_io
@@ -1035,5 +1277,95 @@ subroutine metres_to_eta(part, pextra)
   part%z = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
 
 end subroutine metres_to_eta
+
+subroutine interp_tke_profile_to_hybrid(p_tke, logp_tke, tke_prof, ntke, &
+                                        p_prof, tke_hyb_prof, nlev)
+  implicit none
+  integer, intent(in) :: ntke, nlev
+  real(kind=8), intent(in)  :: p_tke(ntke), logp_tke(ntke)
+  real(kind=8), intent(in)  :: tke_prof(ntke)       ! TKE on fixed p-levels
+  real(kind=8), intent(in)  :: p_prof(nlev)         ! pressures at model levels
+  real(kind=8), intent(out) :: tke_hyb_prof(nlev)   ! TKE at model levels
+
+  integer :: k, k1, k2, klo, khi, kmid
+  real(kind=8) :: logp_h, w
+  real(kind=8) :: pmin, pmax
+
+  pmin = p_tke(1)
+  pmax = p_tke(ntke)
+
+  do k = 1, nlev
+     logp_h = log(p_prof(k))
+
+     ! Clip outside TKE pressure range
+     if (p_prof(k) <= pmin) then
+        tke_hyb_prof(k) = tke_prof(1)
+     else if (p_prof(k) >= pmax) then
+        tke_hyb_prof(k) = tke_prof(ntke)
+     else
+        ! Find bracketing TKE levels in log-pressure space
+        ! klo = 1
+        ! khi = ntke
+        do k1 = 1, ntke-1
+          if (logp_tke(k1) <= logp_h .and. logp_tke(k1+1) >= logp_h) then
+              k2 = k1 + 1
+              exit
+          end if
+        end do
+
+        ! Linear interpolation in log-pressure
+        w = (logp_h - logp_tke(k1)) / (logp_tke(k2) - logp_tke(k1))
+        tke_hyb_prof(k) = (1.d0 - w) * tke_prof(k1) + w * tke_prof(k2)
+     end if
+  end do
+
+end subroutine interp_tke_profile_to_hybrid
+
+subroutine interp_tke_to_hybrid_field
+  use snapdimML, only: nx, ny, nk
+  use snapfldML, only: tke, pressures, tke_hyb
+  implicit none
+
+  integer, parameter :: ntke = 15
+
+  ! TKE fixed pressure levels in hPa
+  real(kind=8), dimension(ntke), parameter :: p_tke_hpa = &
+       (/ 200.d0, 250.d0, 500.d0, 600.d0, &
+          700.d0, 750.d0, 800.d0, 825.d0, 850.d0, 875.d0, &
+          900.d0, 925.d0, 950.d0, 975.d0, 1000.d0 /)
+
+  real(kind=8), dimension(ntke), parameter :: p_tke_pa  = p_tke_hpa * 100.d0
+  real(kind=8), dimension(ntke), parameter :: logp_tke  = log(p_tke_pa)
+
+  integer :: i, j, k
+  real(kind=8), dimension(ntke) :: tke_prof
+  real(kind=8), dimension(nk)   :: p_prof, tke_hyb_prof
+
+  do j = 1, ny
+    do i = 1, nx
+
+      ! Extract TKE profile at this (i,j) over fixed pressure levels
+      do k = 1, ntke
+        tke_prof(k) = tke(i,j,k)
+      end do
+
+      ! Extract pressure profile at this (i,j) on model levels
+      do k = 1, nk
+        p_prof(k) = pressures(i,j,k)   ! Pa
+      end do
+
+      ! Interpolate this column
+      call interp_tke_profile_to_hybrid(p_tke_pa, logp_tke, tke_prof, ntke, &
+                                        p_prof, tke_hyb_prof, nk)
+
+      ! Store result
+      do k = 1, nk
+        tke_hyb(i,j,k) = tke_hyb_prof(k)
+      end do
+
+    end do
+  end do
+
+end subroutine interp_tke_to_hybrid_field
 
 end module rwalkML

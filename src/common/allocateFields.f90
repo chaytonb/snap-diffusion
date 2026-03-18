@@ -20,7 +20,7 @@ module allocateFieldsML
   USE snapparML, only: ncomp, iparnum
   USE snapfldML, only: u1, u2, u3, u_io, v1, v2, v3, v_io, w1, w2, w3, w_io, &
       bl1, bl2, bl3, bl_io, t1, t2, t3, t_io, &
-      ps1, ps2, ps3, ps_io, hbl1, hbl2, hbl3, hbl_io, &
+      ps1, ps2, ps3, ps_io, hbl1, hbl2, hbl3, hbl_io, hinterf, &
       hlevel1, hlevel2, hlevel3, hlevel_io, hlayer1, hlayer2, hlayer3, hlayer_io, &
       concacc, avgbq1, avgbq2, ml_bq, accwet, accdry, concen, &
       depdry, depwet, accprec, avgprec, avghbl, precip, precip_x, precip_io, &
@@ -32,9 +32,9 @@ module allocateFieldsML
       aircraft_doserate_threshold_height, vd_dep, vd_dep_x, vd_dep_io, &
       surface_stress, hflux, t2m, z0, &
       ustar, raero, my, nu, &
-      total_activity_released, total_activity_lost_domain, total_activity_lost_other, &
+      total_activity_released, total_activity_lost_domain, total_activity_lost_other, tke_hyb, &
       wscav, wscav_x, wscav_io, cloud_cover, use_async_io, spec_humid, obukhov_l1, obukhov_l2, obukhov_l_io,  & 
-      u_star1, u_star2, u_star_io, w_star1, w_star2, w_star_io, rho, rhograd, pressures, rel_humid, tv
+      u_star1, u_star2, u_star_io, w_star1, w_star2, w_star_io, rho, rhograd, pressures, rel_humid, tv, tke
   USE snapfilML, only: idata, fdata
   USE snapgrdML, only: ahalf, bhalf, vhalf, alevel, blevel, vlevel, imodlevel, &
       compute_column_max_conc, compute_aircraft_doserate, aircraft_doserate_threshold
@@ -125,6 +125,12 @@ subroutine allocateFields
   ALLOCATE ( t2m(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( spec_humid(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( tke(nx,ny,15), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( hinterf(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( tke_hyb(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( w_star1(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg

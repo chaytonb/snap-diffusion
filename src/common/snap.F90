@@ -836,7 +836,15 @@ PROGRAM bsnap
 
             call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
 
+            ! if (np==5) then
+            !   write(*,*) 'before turb', pdata(np)%x, pdata(np)%y, pdata(np)%ptstep, pdata(np)%zmetres
+            ! endif
+
             call turbulence_master(blfullmix, pdata(np), pextra)
+
+            ! if (np==5) then
+            !   write(*,*) 'after turb', pdata(np)%x, pdata(np)%y, pdata(np)%ptstep, pdata(np)%zmetres
+            ! endif
 
             call check_in_domain(pdata(np), out_of_domain)
             if (out_of_domain) then
