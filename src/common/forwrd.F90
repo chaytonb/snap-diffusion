@@ -80,10 +80,6 @@ subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra)
   part%x = part%x + dx1*pextra%rmx
   part%y = part%y + dy1*pextra%rmy
 
-  ! if (dz1 > 1 .OR. dz1 < -1) then
-  !   write(*,*) part%z, dz1, part%z + dz1, part%x, part%y
-  ! endif
-
   part%z = part%z + dz1
 #endif
   part%z = min(part%z, dble(vlevel(1)))
@@ -181,7 +177,6 @@ subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
   dz2 = 1.0 - dz1
 
 !..interpolation
-
 !..u
   ut1 = dz1*(interp(u1(i,j,k1), u1(i+1,j,k1), u1(i,j+1,k1), u1(i+1,j+1,k1), c1, c2, c3, c4)) &
       +dz2*(interp(u1(i,j,k2), u1(i+1,j,k2), u1(i,j+1,k2), u1(i+1,j+1,k2), c1, c2, c3, c4))

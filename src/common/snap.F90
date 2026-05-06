@@ -173,7 +173,7 @@ PROGRAM bsnap
   USE snapgrdML, only: modleveldump, ivcoor, &
                        klevel, imslp, itotcomp, gparam, &
                        igtype, imodlevel, modlevel_is_average, precipitation_in_output, &
-                       alevel, blevel
+                       alevel, blevel, vlevel
   USE vgravtablesML, only: vgravtables_init
   USE snaptabML, only: tabcon
   USE particleML, only: pdata, extraParticle
@@ -184,7 +184,7 @@ PROGRAM bsnap
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
   USE rwalkML, only: rwalk_init, diffusion_scheme, bl_definition, record_stats, &
-                     turbulence_master, eta_to_metres
+                     turbulence_master, eta_to_metres, well_mixed_test
   USE milibML, only: xyconvert
   USE forwrdML, only: forwrd
   USE wetdepML, only: wetdep, wetdep_scheme, wetdep_scheme_t, &
@@ -269,13 +269,16 @@ PROGRAM bsnap
   real :: rt2
 
   real ::    x(1), y(1)
-  real :: weight, j, pressure_above, pressure_below
-  integer:: above_index, below_index, height_k
+  real :: j
   type(extraParticle) :: pextra
   real ::    rscale
   integer :: ntprof
   type(duration_t) :: dur
   logical :: out_of_domain
+  real :: z
+  real :: z1, z2
+  real :: p1, p2, px
+  real :: frac
 
   real :: mhmin, mhmax  ! minimum and maximum of mixing height
 !> Information for reading from a releasefile
@@ -787,29 +790,6 @@ PROGRAM bsnap
         !..wet deposition
         call wetdep(tstep, pdata(np), pextra)
 
-        ! find eta coordinate of 600metres at particle location
-        if (bl_definition=='constant') then
-          i = pdata(np)%x
-          j = pdata(np)%y
-          above_index = nk
-          do k = 2, nk
-            height_k = hlevel2(i, j, k)
-            if (600 < height_k) then
-                above_index = k
-                exit  
-            end if
-          end do
-
-          below_index = above_index - 1
-
-          pressure_below = alevel(below_index) + blevel(below_index) * ps2(i,j)
-          pressure_above = alevel(above_index) + blevel(above_index) * ps2(i,j) 
-
-          weight = (600 - hlevel2(i, j, below_index)) /  &
-          (hlevel2(i, j, above_index) - hlevel2(i, j, below_index))
-
-          pdata(np)%tbl = (pressure_below + weight * (pressure_above - pressure_below))/ ps2(i, j)
-        endif
         !..move all particles forward, save u and v to pextra
 
         !..apply the random walk method (diffusion)
@@ -817,7 +797,6 @@ PROGRAM bsnap
         ! before output (which computes surface concentrations)
 
         if (adaptive_timesteps) then 
-
           t_local = 0.0
           do while (t_local < tstep)
 
@@ -828,23 +807,48 @@ PROGRAM bsnap
               call posint(pdata(np), rt1, rt2, pextra)
             endif
 
-            ! Enforce timesteps 1/5 of the vertical lagrangian timescale
-            pdata(np)%ptstep = pdata(np)%tlw * 0.2
+            ! find eta coordinate of 600metres at particle location
+            if (bl_definition == 'constant') then
+              pdata(np)%hbl = 600
+
+              i = pdata(np)%x
+              j = pdata(np)%y
+              z = pdata(np)%hbl
+
+              do k = 2, nk-1
+                if (z < hlevel2(i,j,k+1)) exit
+              end do
+              k = max(1, min(k, nk-1))
+
+              z1 = hlevel2(i,j,k)
+              z2 = hlevel2(i,j,k+1)
+
+              p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
+              p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
+
+              if (p1 > 0.0 .and. p2 > 0.0) then
+                px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
+                frac = (px - p1) / (p2 - p1)
+              else
+                frac = (z - z1) / (z2 - z1)
+              end if
+
+              frac = max(0.0, min(1.0, frac))
+
+              pdata(np)%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
+            endif
+
+            ! Enforce timesteps 1/10 of the vertical lagrangian timescale
+            pdata(np)%ptstep = pdata(np)%tlw * 0.1
             
             ! Ensure it does not exceed the global timestep window
             pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
 
-            call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
-
-            ! if (np==5) then
-            !   write(*,*) 'before turb', pdata(np)%x, pdata(np)%y, pdata(np)%ptstep, pdata(np)%zmetres
-            ! endif
+            if (.not.well_mixed_test) then
+              call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+            endif
 
             call turbulence_master(blfullmix, pdata(np), pextra)
-
-            ! if (np==5) then
-            !   write(*,*) 'after turb', pdata(np)%x, pdata(np)%y, pdata(np)%ptstep, pdata(np)%zmetres
-            ! endif
 
             call check_in_domain(pdata(np), out_of_domain)
             if (out_of_domain) then
@@ -859,7 +863,40 @@ PROGRAM bsnap
         else
           pdata(np)%ptstep = tstep
 
-          call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
+          if (.not.well_mixed_test) then
+            call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
+          endif
+
+          ! find eta coordinate of 600metres at particle location
+          if (bl_definition == 'constant') then
+            pdata(np)%hbl = 600
+
+            i = pdata(np)%x
+            j = pdata(np)%y
+            z = pdata(np)%hbl
+
+            do k = 2, nk-1
+              if (z < hlevel2(i,j,k+1)) exit
+            end do
+            k = max(1, min(k, nk-1))
+
+            z1 = hlevel2(i,j,k)
+            z2 = hlevel2(i,j,k+1)
+
+            p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
+            p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
+
+            if (p1 > 0.0 .and. p2 > 0.0) then
+              px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
+              frac = (px - p1) / (p2 - p1)
+            else
+              frac = (z - z1) / (z2 - z1)
+            end if
+
+            frac = max(0.0, min(1.0, frac))
+
+            pdata(np)%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
+          endif
 
           if (use_random_walk) then
             call turbulence_master(blfullmix, pdata(np), pextra)
@@ -868,6 +905,7 @@ PROGRAM bsnap
           !.. check domain (%active) after moving particle
           call check_in_domain(pdata(np), out_of_domain)
           if (out_of_domain) then
+            write(*,*) 'ood'
             m = def_comp(pdata(np)%icomp)%to_output
             total_activity_lost_domain(m) = &
               total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
@@ -1046,7 +1084,8 @@ contains
     use fldout_ncML, only: surface_layer_is_lowest_level, surface_height_m
     use snapparML, only: GRAV_TYPE_UNDEFINED, GRAV_TYPE_OFF, GRAV_TYPE_FIXED
     use rwalkML, only: diffusion_b => b, diffusion_a_in_bl => a_in_bl, diffusion_a_above_bl => a_above_bl, &
-                       bl_definition, diffusion_scheme, entrainment_scheme, meteo_type, turb_homogeneous
+                       bl_definition, diffusion_scheme, entrainment_scheme, turb_homogeneous, &
+                       well_mixed_test
 
     !> Open file unit
     integer, intent(in) :: snapinput_unit
@@ -1236,9 +1275,6 @@ contains
       case ('bl.definition')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) bl_definition
-      case ('meteo.type')
-        if (.not. has_value) goto 12
-        read(cinput(pname_start:pname_end),*) meteo_type
       case ('entrainment.scheme')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) entrainment_scheme
@@ -1249,11 +1285,14 @@ contains
         !..homogeneous turbulence
         turb_homogeneous = .TRUE.
       case ('adaptive.timesteps.on')
-        !..homogeneous turbulence
         adaptive_timesteps = .TRUE.
       case ('adaptive.timesteps.off')
-        !..homogeneous turbulence
         adaptive_timesteps = .FALSE.
+      case ('well.mixed.test.off')
+        well_mixed_test = .FALSE.
+      case ('well.mixed.test.on')
+        !..isolate particle motion to vertical turbulence
+        well_mixed_test = .TRUE.
       case ('diffusion.b.value')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) diffusion_b

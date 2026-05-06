@@ -169,10 +169,6 @@ subroutine edcomp(nx,ny,nz,u,v,edot,ps,xmd2h,ymd2h, &
         dp = da + db*ps(i,j)
         uu(i,j) = dp*u(i,j,k)
         vv(i,j) = dp*v(i,j,k)
-        ! if (i==412 .AND. j==505) then
-        !   write(*,*) uu(i,j), vv(i,j), dp, da
-        !   error stop
-        ! endif
       end do
     end do
 

@@ -33,7 +33,7 @@ module rwalkML
   real(real64), parameter :: tmix_h = 15.0*60.0 ! Horizontal base-time time = 15 min (to reach ax^b width)
   real(real64), parameter :: lmax = 0.28 ! Maximum l-eta in the mixing layer
   real(real64), parameter :: labove = 0.03 ! Standard l-eta above the mixing layer
-  real(real64), parameter :: entrainment = 0.1 ! Entrainment zone = 10%*h
+  real(real64), parameter :: entrainment = 0.10 ! Entrainment zone = 10%*h
 
   ! Values for random number generation
   integer(int32), parameter :: max_rands=6000000
@@ -44,6 +44,7 @@ module rwalkML
   real(real64), save, public :: a_above_bl = 0.25
   real(real64), save, public :: b = 0.875
   logical, save, public :: turb_homogeneous = .TRUE.
+  logical, save, public :: well_mixed_test = .FALSE.
   character(len=64), save, public :: diffusion_scheme = ''
   character(len=64), save, public :: bl_definition = ''
   character(len=64), save, public :: meteo_type = ''
@@ -180,11 +181,6 @@ subroutine rwalk(blfullmix,part,pextra)
   call random_number(rnd)
   rnd = rnd - 0.5
 
-  if (bl_definition == 'constant') then
-    part%hbl = 600
-    part%tbl = 0.929817438
-  endif
-
 ! horizontal diffusion
   if (part%z > part%tbl) then ! in boundary layer
     a = a_in_bl
@@ -192,21 +188,28 @@ subroutine rwalk(blfullmix,part,pextra)
     a = a_above_bl
   endif
 
-  vabs = hypot(pextra%u, pextra%v)
-  rl = 2*a*((vabs*tmix_h)**b) * tsqrtfactor_h ! sqrt error/sigma propagation
-  part%x = part%x + rl*rnd(1)*pextra%rmx
-  part%y = part%y + rl*rnd(2)*pextra%rmy
+  if (.NOT.well_mixed_test) then
+    vabs = hypot(pextra%u, pextra%v)
+    rl = 2*a*((vabs*tmix_h)**b) * tsqrtfactor_h ! sqrt error/sigma propagation
+    part%x = part%x + rl*rnd(1)*pextra%rmx
+    part%y = part%y + rl*rnd(2)*pextra%rmy
+  endif
 
 
 ! vertical diffusion
   if (part%z <= part%tbl) then ! Above boundary layer
-      part%z = part%z + vrdbla*rnd(3)
+
+      if ((part%z + vrdbla*rnd(3)).gt.part%tbl) then ! reflect off BL top
+        part%z = 2 * part%tbl - (part%z + vrdbla*rnd(3))
+      else
+        part%z = part%z + vrdbla*rnd(3)
+      endif
 
   else ! In boundary layer
     bl_entrainment_thickness = (1.0 - part%tbl)*(1.+entrainment)
     if (blfullmix .or. (tsqrtfactor_v .gt. 1.0)) then ! full mixing
       part%z = 1.0 - bl_entrainment_thickness*(rnd(3)+0.5)
-    else ! vertical mixing splittet in smaller time-steps   
+    else ! vertical mixing split in smaller time-steps   
       rv  = (1-part%tbl)*tsqrtfactor_v
 
       part%z = part%z + rv*rnd(3)
@@ -255,6 +258,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
   real :: top_entrainment
   real :: wst ! convective scale velocity
   real :: ol ! obukhov length
+  real :: turb_delu, turb_delv ! turbulent displacements in u and v directions
 
   ! Dimensionless height 
   if (turb_homogeneous) then ! Take middle BL value if homogeneous
@@ -271,6 +275,12 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
 
   wst = pextra%wst
   ol = pextra%ol
+
+  if (well_mixed_test) then
+    wst = 1.5
+    ol = -100
+    pextra%ust = 0.5
+  endif
 
   ! Case 1, Neutral Conditions
   if (part%hbl/ABS(ol).lt.1.) then
@@ -358,28 +368,37 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
 
   part%tlw = tlw
 
-  ! Calculate turbulent horizontal velocities
-  if (nrand+1.gt.max_rands) nrand=1
-  if (part%ptstep/tlu.lt..5) then
-    part%turbvelu=(1.-part%ptstep/tlu)*part%turbvelu+rands(nrand)*sigu*sqrt(2.*part%ptstep/tlu)
-  else
-    ru=exp(-part%ptstep/tlu)
-    part%turbvelu=ru*part%turbvelu+rands(nrand)*sigu*sqrt(1.-ru**2)
-  endif
-  if (part%ptstep/tlv.lt..5) then
-    part%turbvelv=(1.-part%ptstep/tlv)*part%turbvelv+rands(nrand+1)*sigv*sqrt(2.*part%ptstep/tlv)
-  else
-    rv=exp(-part%ptstep/tlv)
-    part%turbvelv=rv*part%turbvelv+rands(nrand+1)*sigv*sqrt(1.-rv**2)
-  endif
-  nrand=nrand+2
+  if (.not.well_mixed_test) then
+    ! Calculate turbulent horizontal velocities
+    if (nrand+1.gt.max_rands) nrand=1
+    if (part%ptstep/tlu.lt..5) then
+      part%turbvelu=(1.-part%ptstep/tlu)*part%turbvelu+rands(nrand)*sigu*sqrt(2.*part%ptstep/tlu)
+    else
+      ru=exp(-part%ptstep/tlu)
+      part%turbvelu=ru*part%turbvelu+rands(nrand)*sigu*sqrt(1.-ru**2)
+    endif
+    if (part%ptstep/tlv.lt..5) then
+      part%turbvelv=(1.-part%ptstep/tlv)*part%turbvelv+rands(nrand+1)*sigv*sqrt(2.*part%ptstep/tlv)
+    else
+      rv=exp(-part%ptstep/tlv)
+      part%turbvelv=rv*part%turbvelv+rands(nrand+1)*sigv*sqrt(1.-rv**2)
+    endif
+    nrand=nrand+2
 
-  ! Calculate new horizontal positions. Maybe should only update at the end?
-  part%x = part%x + part%turbvelu * part%ptstep*pextra%rmx
-  part%y = part%y + part%turbvelv * part%ptstep*pextra%rmy
+    turb_delu = part%turbvelu * part%ptstep
+    turb_delv = part%turbvelv * part%ptstep
 
-  ! Factor for density correction, k+1 to avoid artificial first layer
-  rhoaux=rhograd(i,j,k+1)/rho(i,j,k+1)
+    ! Transform turbulent displacements from along/crosswind to x/y
+    call align_turbvels(part, pextra, turb_delu, turb_delv)
+
+    ! Calculate new horizontal positions
+    part%x = part%x + turb_delu*pextra%rmx
+    part%y = part%y + turb_delv*pextra%rmy
+  endif
+
+  ! Vertical interpolation of rho and rhograd
+  call interp_rho(part, pextra)
+  rhoaux=pextra%rhograd/pextra%rho
 
   ! ratio of time step to lagrangian timescale for autocorrelation
   dttlw = part%ptstep/tlw
@@ -397,40 +416,16 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
     delz=mod(delz,part%hbl)
   endif
 
-  if (entrainment_scheme=='snap') then
-    ! SNAP ENTRAINMENT SCHEME --------------------------------------------------
-    part%zmetres = part%zmetres + delz
-    ! ... reflection from the ABL top
-    ! ... but allow for entrainment
-    ! top_entrainment 10% higher than tbl
-    top_entrainment = part%hbl + part%hbl * 0.1
-    if (part%zmetres > top_entrainment) then
-      part%zmetres = 2.0*part%hbl - part%zmetres
-    endif
-
-    if (part%zmetres < 0.0) then
-        ! reflect across ground (z=0)
-        part%zmetres = -part%zmetres
-    endif
-
-    ! cap at entrainment height
-    part%zmetres = min(part%zmetres, top_entrainment)
-
-    ! enforce ground
-    part%zmetres = max(part%zmetres, 0.0)
-    ! --------------------------------------------------
-  else
-    ! Reflection and position updates
-    if (delz.lt.-part%zmetres) then         ! reflection at ground
-      part%zmetres = -part%zmetres - delz
-      part%icbt = -1
-    else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
-      part%zmetres = -part%zmetres-delz+2.*part%hbl
-      part%icbt = -1
-    else                         ! no reflection
-      part%zmetres = part%zmetres+delz
-      part%icbt = 1
-    endif
+  ! Reflection and position updates
+  if (delz.lt.-part%zmetres) then         ! reflection at ground
+    part%zmetres = -part%zmetres - delz
+    part%icbt = -1
+  else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
+    part%zmetres = -part%zmetres-delz+2.*part%hbl
+    part%icbt = -1
+  else                         ! no reflection
+    part%zmetres = part%zmetres+delz
+    part%icbt = 1
   endif
 
 end subroutine flexpart_diffusion_within_abl
@@ -457,8 +452,10 @@ subroutine flexpart_diffusion_above_abl(part, pextra)
   nrand=nrand+2
   part%turbvelw=0
 
-  part%x = part%x + part%turbvelu * part%ptstep*pextra%rmx
-  part%y = part%y + part%turbvelv * part%ptstep*pextra%rmy
+  if (.not.well_mixed_test) then
+    part%x = part%x + part%turbvelu * part%ptstep*pextra%rmx
+    part%y = part%y + part%turbvelv * part%ptstep*pextra%rmy
+  endif
 
 end subroutine flexpart_diffusion_above_abl
 
@@ -494,6 +491,12 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   wst = pextra%wst
   ust = pextra%ust
 
+  if (well_mixed_test) then
+    wst = 1.5
+    pextra%ol = -100
+    ust = 0.5
+  endif
+
   ! Case 1, Stable Conditions
   if (pextra%ol.gt.0.) then
     sigu=2.*ust*(1.-scaled_height) 
@@ -524,9 +527,7 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
     tlv = tlu
     tlw = 2*sigw**2 / (c*eps)
 
-    ! From FLEXPART Code ??
-    dsigwdz=0.5/sigw/part%hbl*(-1.4*ust**2+wst**2* &
-         (0.8*max(scaled_height,1.e-3)**(-.33333)-1.8*scaled_height**0.66666))
+    dsigwdz = (1.0/(2.0 * sigw * part%hbl)) *(wst**2*(0.8*scaled_height**(-1.0/3.0) - 1.8*scaled_height**(2.0/3.0)) - 1.4*ust**2)
   endif
 
   if (turb_homogeneous) dsigwdz=0
@@ -555,15 +556,19 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   dttlw = part%ptstep/tlw
 
   ! Calculate new horizontal positions
-  part%x = part%x + part%turbvelu * part%ptstep*pextra%rmx
-  part%y = part%y + part%turbvelv * part%ptstep*pextra%rmy
+
+  if (.not.well_mixed_test) then
+    part%x = part%x + part%turbvelu * part%ptstep*pextra%rmx
+    part%y = part%y + part%turbvelv * part%ptstep*pextra%rmy
+  endif
 
   if (nrand+1.gt.max_rands) nrand=1
   ! Calculate turbulent vertical velocity
   part%turbvelw=part%turbvelw*(1-(dttlw)) + (2*sigw**2 * dttlw)**0.5*rands(nrand) & 
-                + (part%ptstep/sigw) * dsigwdz * (sigw**2 + part%turbvelw**2) 
+                + (part%ptstep/sigw) * dsigwdz * (sigw**2 + part%turbvelw**2)
   nrand=nrand+1
 
+  
   ! Calculate new vertical position
   delz=part%turbvelw*part%ptstep 
 
@@ -615,18 +620,26 @@ subroutine name_random_walk_profile_above_bl(part, pextra)
   dttlw = part%ptstep/tlw
 
   ! Calculate new horizontal positions
-  part%x = part%x + part%turbvelu * part%ptstep*pextra%rmx
-  part%y = part%y + part%turbvelv * part%ptstep*pextra%rmy
+  if (.not.well_mixed_test) then
+    part%x = part%x + part%turbvelu * part%ptstep*pextra%rmx
+    part%y = part%y + part%turbvelv * part%ptstep*pextra%rmy
+  endif
 
   if (nrand+1.gt.max_rands) nrand=1
   ! Calculate turbulent vertical velocity
-  part%turbvelw=part%turbvelw*(1-(dttlw)) + (2*sigw**2 * dttlw)*rands(nrand)
+  part%turbvelw=part%turbvelw*(1-(dttlw)) + (2*sigw**2 * dttlw)**0.5*rands(nrand)
   nrand=nrand+1
 
   ! Calculate new vertical position
   delz=part%turbvelw*part%ptstep  
 
-  part%zmetres = part%zmetres + delz
+  !Reflect at inversion (from above) so it is symmetric with BL routine
+  if (part%zmetres+delz .lt. part%hbl) then
+    part%zmetres = part%hbl + (part%hbl - part%zmetres - delz)
+    part%turbvelw = -part%turbvelw
+  else
+    part%zmetres = part%zmetres + delz
+  endif
 
 end subroutine name_random_walk_profile_above_bl
 
@@ -638,7 +651,7 @@ subroutine variable_k_name_within_bl(part, pextra)
   !> extra information regarding the particle
   type(extraParticle), intent(inout) :: pextra
 
-  integer :: k ! Von Karmans constant
+  real :: k ! Von Karmans constant
   real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
   real :: tlu, tlv, tlw ! Lagrangian timescales
   real :: delz ! Turbulent vertical displacement (m)
@@ -654,6 +667,12 @@ subroutine variable_k_name_within_bl(part, pextra)
   c = 2 ! constant, values for this disagree. 3 from Sawford
   wst = pextra%wst
   ust = pextra%ust
+
+  if (well_mixed_test) then
+    wst = 1.5
+    pextra%ol = -100
+    ust = 0.5
+  endif
   
   ! Case 1, Stable Conditions
   if (pextra%ol.gt.0.) then
@@ -676,7 +695,7 @@ subroutine variable_k_name_within_bl(part, pextra)
     sigw = (1.2 * wst**2  *(1-0.9*scaled_height)*(scaled_height)**0.666 + (1.8 - 1.4*scaled_height)*ust**2)**0.5
     sigw=max(sigw,0.1) 
 
-    eps = (1.5 - 1.2 * (scaled_height)**0.333)*(wst/part%hbl) + (ust**3 * (1-0.8*scaled_height)/(k*part%zmetres))
+    eps = (1.5 - 1.2 * (scaled_height)**0.333)*(wst**3/part%hbl) + (ust**3 * (1-0.8*scaled_height)/(k*(part%hbl*0.5)))
 
     tlu = 2*sigu**2 / (c*eps)
     tlv = tlu
@@ -695,48 +714,28 @@ subroutine variable_k_name_within_bl(part, pextra)
   part%turbvelw = ((2*(sigw**2 * tlw))/tstep)**0.5 * rands(nrand+2)
   nrand=nrand+3
 
-  ! Calculate new horizontal positions
-  part%x = part%x + part%turbvelu * tstep*pextra%rmx
-  part%y = part%y + part%turbvelv * tstep*pextra%rmy
+  if (.not.well_mixed_test) then
+    ! Calculate new horizontal positions
+    part%x = part%x + part%turbvelu * tstep*pextra%rmx
+    part%y = part%y + part%turbvelv * tstep*pextra%rmy
+  endif
+
+  delz=part%turbvelw*tstep 
 
   ! Calculate new vertical position
-  delz=part%turbvelw*tstep 
   if (abs(delz).gt.part%hbl) then
     delz=mod(delz,part%hbl)
   endif
 
-  if (entrainment_scheme=='snap') then
-    ! SNAP ENTRAINMENT SCHEME --------------------------------------------------
-    part%zmetres = part%zmetres + delz
-    ! ... reflection from the ABL top
-    ! ... but allow for entrainment
-    ! top_entrainment 10% higher than tbl
-    top_entrainment = part%hbl + part%hbl * 0.1
-    if (part%zmetres > top_entrainment) then
-      part%zmetres = 2.0*part%hbl - part%zmetres
-    endif
-
-    if (part%zmetres < 0.0) then
-        ! reflect across ground (z=0)
-        part%zmetres = -part%zmetres
-    endif
-
-    ! cap at entrainment height
-    part%zmetres = min(part%zmetres, top_entrainment)
-
-    ! enforce ground
-    part%zmetres = max(part%zmetres, 0.0)
-    ! --------------------------------------------------
-  else
-    ! Reflection and position updates
-    if (delz.lt.-part%zmetres) then         ! reflection at ground
-      part%zmetres = -part%zmetres - delz
-    else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
-      part%zmetres = -part%zmetres-delz+2.*part%hbl
-    else                         ! no reflection
-      part%zmetres = part%zmetres+delz
-    endif
+  ! Reflection and position updates
+  if (delz.lt.-part%zmetres) then         ! reflection at ground
+    part%zmetres = -part%zmetres - delz
+  else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
+    part%zmetres = -part%zmetres-delz+2.*part%hbl
+  else                         ! no reflection
+    part%zmetres = part%zmetres+delz
   endif
+
 end subroutine variable_k_name_within_bl
 
 subroutine variable_k_name_above_bl(part, pextra) 
@@ -751,6 +750,7 @@ subroutine variable_k_name_above_bl(part, pextra)
   real :: tlu, tlv, tlw ! Lagrangian timescales
   real :: delz ! Turbulent vertical displacement (m)
   real :: top_entrainment
+  real :: znew, ztop
 
   sigu = 0.25
   sigv = sigu
@@ -765,18 +765,21 @@ subroutine variable_k_name_above_bl(part, pextra)
   part%turbvelw = ((2*(sigw**2 * tlw))/tstep)**0.5 * rands(nrand+2)
   nrand=nrand+3
 
-  ! Calculate new horizontal positions
-  part%x = part%x + part%turbvelu * tstep * pextra%rmx
-  part%y = part%y + part%turbvelv * tstep * pextra%rmy
-
-  ! Calculate new vertical position
-  delz=part%turbvelw*tstep 
-  if (abs(delz).gt.part%hbl) then
-    delz=mod(delz,part%hbl)
+  if (.not.well_mixed_test) then
+    ! Calculate new horizontal positions
+    part%x = part%x + part%turbvelu * tstep * pextra%rmx
+    part%y = part%y + part%turbvelv * tstep * pextra%rmy
   endif
 
   ! Calculate new vertical position
-  part%zmetres = part%zmetres+delz
+  delz=part%turbvelw*tstep 
+
+  ! Reflect at inversion (from above) so it is symmetric with BL routine
+  if (part%zmetres+delz .lt. part%hbl) then
+    part%zmetres = 2*part%hbl - (part%zmetres + delz)
+  else
+    part%zmetres = part%zmetres + delz
+  endif
 
 end subroutine variable_k_name_above_bl
 
@@ -788,57 +791,88 @@ subroutine constant_k_name_within_bl(part, pextra)
   !> extra information regarding the particle
   type(extraParticle), intent(inout) :: pextra
 
-  integer :: hor_diffu=5300
-  real :: top_entrainment=0.03
+  ! Locals
   real :: rnd(1)
-  real :: mixing_top
+  real :: hbl, sigma_ft, delta_ext, mixing_top
 
-  mixing_top = part%hbl + part%hbl*top_entrainment
+  integer, parameter :: hor_diffu = 5300 ! m^2 s^-1 (BL horizontal diffusion)
+  real, parameter :: K_ft = 1.5 ! m^2 s^-1 (FT vertical diffusion)
+  real, parameter :: alpha = 1.7 ! entrainment zone extension factor
+
+  ! Compute free troposphere displacement length scale
+  sigma_ft = sqrt(2.0 * K_ft * tstep) 
+  delta_ext = alpha * sigma_ft
+
+  mixing_top = part%hbl + delta_ext
 
   call random_number(rnd)
-  rnd = rnd - 0.5
 
-  ! Calculate Turbulent Velocities, Ryall and Maryon 1998
-  if (nrand+1.gt.max_rands) nrand=1
-  part%turbvelu = ((2*hor_diffu)/tstep)**0.5 * rands(nrand)
-  part%turbvelv = ((2*hor_diffu)/tstep)**0.5 * rands(nrand+1)
-  nrand=nrand+2
+  if (.not.well_mixed_test) then
+    ! Calculate Turbulent Velocities, Ryall and Maryon 1998
+    if (nrand+1.gt.max_rands) nrand=1
+    part%turbvelu = ((2*hor_diffu)/tstep)**0.5 * rands(nrand)
+    part%turbvelv = ((2*hor_diffu)/tstep)**0.5 * rands(nrand+1)
+    nrand=nrand+2
 
-  ! Calculate new horizontal positions
-  part%x = part%x + part%turbvelu * tstep*pextra%rmx
-  part%y = part%y + part%turbvelv * tstep*pextra%rmy
+    ! Calculate new horizontal positions
+    part%x = part%x + part%turbvelu * tstep*pextra%rmx
+    part%y = part%y + part%turbvelv * tstep*pextra%rmy
+  endif
 
-  part%zmetres = (rnd(1) + 0.5) * mixing_top
+  part%zmetres = rnd(1) * mixing_top
 
 end subroutine constant_k_name_within_bl
 
-subroutine constant_k_name_above_bl(part, pextra) 
-  USE particleML, only: extraParticle, Particle
-  
-  !> particle with information
-  type(Particle), intent(inout)  :: part
-  !> extra information regarding the particle
+subroutine constant_k_name_above_bl(part, pextra)
+  use particleML, only: extraParticle, Particle
+  implicit none
+
+  type(Particle),      intent(inout) :: part
   type(extraParticle), intent(inout) :: pextra
 
-  real :: delz ! Turbulent vertical displacement (m)
-  integer :: hor_diffu=5300/4
-  real :: vert_diffu=1.5
+  real, parameter :: hor_diffu_ft = 5300.0/4.0 ! m^2 s^-1
+  real, parameter :: K_ft = 1.5 ! m^2 s^-1
+  real, parameter :: alpha = 1.7 ! entrainment zone extension factor
+  real :: dt, delz, z0, z1, h, a, b, p_cross
+  real :: rnd(2)
+  real :: hbl, sigma_ft, delta_ext, mixing_top
 
-  ! Calculate Turbulent Velocities, Ryall and Maryon 1998
-  if (nrand+2.gt.max_rands) nrand=1
-  part%turbvelu = ((2*hor_diffu)/tstep)**0.5 * rands(nrand)
-  part%turbvelv = ((2*hor_diffu)/tstep)**0.5 * rands(nrand+1)
-  part%turbvelw = ((2*vert_diffu)/tstep)**0.5 * rands(nrand+2)
-  nrand=nrand+3
+  dt = tstep
+  h = part%hbl ! BL height at the particle location/time
 
-  ! Calculate new horizontal positions
-  part%x = part%x + part%turbvelu * tstep*pextra%rmx
-  part%y = part%y + part%turbvelv * tstep*pextra%rmy
+  ! Turbulent velocities
+  if (nrand + 2 .gt. max_rands) nrand = 1
+  part%turbvelu = sqrt((2.0 * hor_diffu_ft) / dt) * rands(nrand)
+  part%turbvelv = sqrt((2.0 * hor_diffu_ft) / dt) * rands(nrand + 1)
+  part%turbvelw = sqrt((2.0 * K_ft) / dt) * rands(nrand + 2)
+  nrand = nrand + 3
 
-  delz = part%turbvelw*tstep
+  if (.not. well_mixed_test) then
+    part%x = part%x + part%turbvelu * dt * pextra%rmx
+    part%y = part%y + part%turbvelv * dt * pextra%rmy
+  endif
 
-  part%zmetres = part%zmetres+delz
-  
+  ! Vertical step
+  z0 = part%zmetres
+  delz = part%turbvelw * dt
+  z1 = z0 + delz
+
+  ! Compute free troposphere displacement length scale
+  sigma_ft = sqrt(2.0 * K_ft * tstep) 
+  delta_ext = alpha * sigma_ft
+
+  mixing_top = part%hbl + delta_ext
+
+  if (z1 <= mixing_top) then
+    ! End-point crosses into BL: instant-mix within BL
+    call random_number(rnd)
+    part%zmetres = rnd(1) * mixing_top
+    return
+  end if
+
+  ! No crossing; accept the FT step
+  part%zmetres = z1
+
 end subroutine constant_k_name_above_bl
 
 subroutine tke_diffusion(part, pextra)
@@ -860,7 +894,7 @@ subroutine tke_diffusion(part, pextra)
   real :: dttlw
   real :: pttprof(nk), pttrefprof(nk)
   integer :: indz, indzp
-  real :: r, cp, g, part_z_init
+  real :: r, cp, g
 
   ! Physical constants
   r = 287.0
@@ -873,14 +907,14 @@ subroutine tke_diffusion(part, pextra)
   k = ivlayer(part_vert_index)
   dt = part%ptstep
   part_z = part%zmetres
-  part_z_init = part%zmetres
 
   call calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu, tlv, tlw)
 
   part%tlw = tlw
 
-  ! Density correction (use grad at k+1, avoid first layer)
-  rhoaux = rhograd(i, j, min(k+1, nk)) / rho(i, j, min(k+1, nk))
+  ! Interpolate air density and gradient to part vert position
+  call interp_rho(part, pextra)
+  rhoaux = pextra%rhograd/pextra%rho
 
   dttlw = dt/tlw
 
@@ -906,8 +940,10 @@ subroutine tke_diffusion(part, pextra)
   part%turbvelu = ru * part%turbvelu + rands(nrand+1) * sqrt(1.0 - ru**2) * sigu
   part%turbvelv = rv * part%turbvelv + rands(nrand+2) * sqrt(1.0 - rv**2) * sigv
 
-  part%x = part%x + part%turbvelu * dt * pextra%rmx
-  part%y = part%y + part%turbvelv * dt * pextra%rmy
+  if (.not.well_mixed_test) then
+    part%x = part%x + part%turbvelu * dt * pextra%rmx
+    part%y = part%y + part%turbvelv * dt * pextra%rmy
+  endif
 
   nrand = nrand + 3
 
@@ -915,7 +951,7 @@ end subroutine tke_diffusion
 
 subroutine vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, sigw, part_turbvelw, delz)
 
-  USE snapfldML, only: hlevel2, hlayer2, hinterf
+  USE snapfldML, only: hlevel2, hlayer2, hinterf, tke_hyb
   USE snapgrdML, only: ivlayer
   USE snapdimML, only: nk
   use, intrinsic :: ieee_arithmetic
@@ -928,17 +964,14 @@ subroutine vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, 
   real(8), intent(inout) :: part_turbvelw
 
   integer :: indz_c, indzp_c, dir, ind, part_vert_index, k_c, interface_ind, num_loops=1
-  real :: z_bot, z_top, z_bot_next, z_top_next, eps
+  real :: z_bot, z_top, z_bot_next, z_top_next
   real :: ts, ratio, sigw_c, tlw_c
   real :: rnd(1)
   logical :: reflect
   real :: zt_tmp
 
-  eps = 1e-6 ! Small value to avoid boundary issues
-
-  call random_number(rnd)
-
   do
+    call random_number(rnd)
     ! Calculate layer boundaries
     z_bot = hinterf(i,j,k)
     z_top = hinterf(i,j,k+1)
@@ -1180,6 +1213,111 @@ subroutine air_density
 
 end subroutine
 
+subroutine interp_rho(part, pextra)
+  use particleML, only: Particle, extraParticle
+  use snapfldML,  only: hlevel2, ps2, rho, rhograd
+  use snapgrdML,  only: vlevel, alevel, blevel
+  use snapdimML,  only: nk
+  implicit none
+
+  type(Particle),      intent(inout) :: part
+  type(extraParticle), intent(inout) :: pextra
+
+  integer :: i, j, k
+  real :: eta
+  real :: z1, z2
+  real :: p1, p2, px
+  real :: frac, w, denom
+  real :: y1, y2, m1, m2
+  real, parameter :: tiny_denom = 1.0e-12
+
+  ! Grid indices and particle eta
+  i   = part%x
+  j   = part%y
+  eta = part%z
+
+  ! 1) Find bracketing layer in eta
+  do k = 1, nk-1
+    if (eta > vlevel(k+1)) exit
+  end do
+  k = max(1, min(k, nk-1))
+
+  ! 2) Fraction in eta
+  frac = (eta - vlevel(k)) / (vlevel(k+1) - vlevel(k))
+  frac = max(0.0, min(1.0, frac))
+
+  ! 3) Heights at bracketing levels
+  z1 = hlevel2(i,j,k)
+  z2 = hlevel2(i,j,k+1)
+
+  ! 4) Pressures at bracketing levels (Pa)
+  p1 = alevel(k)*100.0 + blevel(k) * ps2(i,j) * 100.0
+  p2 = alevel(k + 1)*100.0 + blevel(k + 1) * ps2(i,j) * 100.0
+
+  ! 5) Pressure at particle (linear in frac)
+  px = p1 * (1.0 - frac) + p2 * frac
+
+  ! 6) Particle geometric height using log-pressure interpolation 
+  if (p1 > 0.0 .and. p2 > 0.0) then
+    part%zmetres = z1 + (z2 - z1) / log(p2/p1) * log(px/p1)
+  else
+    part%zmetres = z1 * (1.0 - frac) + z2 * frac
+  end if
+
+  ! 7) Values at bracketing levels
+  y1 = rho(i,j,k)
+  y2 = rho(i,j,k+1)
+  m1 = rhograd(i,j,k)     ! assumed dρ/dz at level k
+  m2 = rhograd(i,j,k+1)   ! assumed dρ/dz at level k+1
+
+  ! 8) Log-pressure interpolation weight
+  if (p1 > 0.0 .and. p2 > 0.0) then
+    denom = log(p2/p1)
+    if (abs(denom) > tiny_denom .and. px > 0.0) then
+      w = log(px/p1) / denom
+      w = max(0.0, min(1.0, w))
+    else
+      ! Fallback if pressures are nearly identical
+      w = frac
+    end if
+  else
+    ! Fallback if invalid pressures
+    w = frac
+  end if
+
+  ! 9) Interpolate rho and rhograd using log-pressure weight
+  pextra%rho = y1*(1.0 - w) + y2*w
+  pextra%rhograd = m1*(1.0 - w) + m2*w
+
+end subroutine interp_rho
+
+subroutine align_turbvels(part, pextra, turb_delu, turb_delv)
+  use particleML, only: extraParticle, Particle
+  implicit none
+
+  type(Particle),      intent(in)    :: part
+  type(extraParticle), intent(in)    :: pextra
+  real,                intent(inout) :: turb_delu, turb_delv
+
+  real :: umean, vmean, mag_inv, cosphi, sinphi
+  real :: du_old, dv_old
+  real, parameter :: eps = 1.e-30
+
+  umean = pextra%u
+  vmean = pextra%v
+  mag_inv = 1.0 / max(sqrt(umean*umean + vmean*vmean), eps)
+
+  cosphi = umean * mag_inv
+  sinphi = vmean * mag_inv
+
+  du_old = turb_delu
+  dv_old = turb_delv
+
+  turb_delu = du_old * cosphi - dv_old * sinphi
+  turb_delv = du_old * sinphi + dv_old * cosphi
+end subroutine align_turbvels
+
+
 subroutine eta_to_metres(part, pextra)
 
   use particleML, only: extraParticle, Particle
@@ -1348,6 +1486,9 @@ subroutine interp_tke_to_hybrid_field
       do k = 1, ntke
         tke_prof(k) = tke(i,j,k)
       end do
+
+      ! Strange values of TKE at TOA, set to zero
+      tke_prof(1) = 0
 
       ! Extract pressure profile at this (i,j) on model levels
       do k = 1, nk

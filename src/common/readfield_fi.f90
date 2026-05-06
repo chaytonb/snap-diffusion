@@ -69,7 +69,7 @@ contains
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
-    USE rwalkML, only: bl_definition, diffusion_fields, air_density, meteo_type, diffusion_scheme
+    USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme
     USE compheightML, only: compheight
 !> current timestep (always positive), negative istep means reset
     integer, intent(in) :: istep
@@ -241,12 +241,6 @@ contains
 
       !..sigma_dot/eta_dot (0 at surface)
       !..eta: eta_dot (or omega) stored in the same levels as u,v,th.
-
-      ! Flexextract data pulls w in sigma but then converts it to omega, so need to convert it back
-      if (meteo_type=='flexextract') then
-        met_params%sigmadot_is_omega = .true.
-      endif
-
       if (met_params%sigmadotv == '') then
         w_io = 0
       else
@@ -301,12 +295,6 @@ contains
     call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
 !.. Read in surface stress varaibles
-    if (meteo_type == 'flexextract') then
-      met_params%xflux_is_accumulated = .false.
-      met_params%yflux_is_accumulated = .false.
-      met_params%hflux_is_accumulated = .false.
-    endif
-
     if (met_params%surface_stress /= "") then
       ! Load surface_stress
       call fi_checkload(fio, met_params%surface_stress, downward_momentum_flux_units, surface_stress(:, :), nt=timepos, nr=nr)

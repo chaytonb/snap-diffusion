@@ -255,7 +255,6 @@ module snapmetML
       met_params%apv = 'ap'
       met_params%bv = 'b'
       met_params%sigmadotv = '' 
-      met_params%sigmadot_is_omega = .false.
       met_params%psv = 'surface_air_pressure'
       met_params%precaccumv = ''
       met_params%precconvrt = ''

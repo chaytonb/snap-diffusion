@@ -86,7 +86,7 @@ subroutine posint(part,rt1,rt2,pextra)
   rmy= interp(ym(i,j), ym(i+1,j), ym(i,j+1), ym(i+1,j+1), c1, c2, c3, c4)
 
   !..precipitation intensity (mm/hour)
-  pr= interp(precip(i,j), precip(i+1,j), precip(i,j+1), precip(i+1,j+1), c1, c2, c3, c4)
+  pr= interp(precip(i,j), precip(i+1,j), precip(i,j+1), precip(i+1,j+1), c1, c2, c3, c4)  
 
   !..update boundary layer top and height, map ratio and precipitation
   part%tbl=bl

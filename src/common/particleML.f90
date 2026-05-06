@@ -85,6 +85,10 @@ module particleML
         real         :: ust
         !> Convective velocity scale at particle position
         real         :: wst
+        !> Air density at particle position
+        real         :: rho
+        !> Gradient of air density at particle position
+        real         :: rhograd
         !> vertical index
         integer      :: k
     end type extraParticle
