@@ -1,19 +1,7 @@
 ! SNAP: Servere Nuclear Accident Programme
-! Copyright (C) 1992-2017   Norwegian Meteorological Institute
-!
-! This file is part of SNAP. SNAP is free software: you can
-! redistribute it and/or modify it under the terms of the
-! GNU General Public License as published by the
-! Free Software Foundation, either version 3 of the License, or
-! (at your option) any later version.
-!
-! This program is distributed in the hope that it will be useful,
-! but WITHOUT ANY WARRANTY; without even the implied warranty of
-! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-! GNU General Public License for more details.
-!
-! You should have received a copy of the GNU General Public License
-! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+! Copyright (C) 1992-2026   Norwegian Meteorological Institute
+
+! License: GNU General Public License Version 3 (GNU GPL-3.0)
 
 !> meteorology parameter definitions
 !>
@@ -66,6 +54,8 @@ module snapmetML
     logical :: xflux_is_accumulated = .false.
     logical :: yflux_is_accumulated = .false.
     logical :: hflux_is_accumulated = .false.
+    ! sign of xflux and yflux not relevant since we only use the magnitude
+    logical :: hflux_is_downward = .true.
     logical :: temp_is_abs = .false.
     logical :: has_dummy_dim = .false.
     logical :: manual_level_selection = .false.
@@ -79,11 +69,11 @@ module snapmetML
     !> Wet deposition: Use cloud cover fraction
     logical :: use_ccf = .false.
 
-    !> Cloud water (3D)
+    !> Precip (3D)
     character(len=80) :: mass_fraction_rain_in_air = ''
     character(len=80) :: mass_fraction_graupel_in_air = ''
     character(len=80) :: mass_fraction_snow_in_air = ''
-    !> Precip (3D)
+    !> Cloud water (3D)
     character(len=80) :: mass_fraction_cloud_condensed_water_in_air = ''
     character(len=80) :: mass_fraction_cloud_ice_in_air = ''
     !> Cloud fraction (3D)
@@ -104,7 +94,8 @@ module snapmetML
   character(len=*), parameter, public :: precip_units_fallback = 'mm'
   character(len=*), parameter, public :: temp_units = 'K'
 
-  character(len=*), parameter, public :: downward_momentum_flux_units = 'N s/m^2'
+  character(len=*), parameter, public :: downward_momentum_flux_units = 'N/m^2'
+  character(len=*), parameter, public :: accum_downward_momentum_flux_units = 'N s/m^2'
   character(len=*), parameter, public :: surface_roughness_length_units = 'm'
   character(len=*), parameter, public :: surface_heat_flux_units = 'W/m^2'
   character(len=*), parameter, public :: acc_momentum_flux_units = 'N s/m^2'
@@ -198,7 +189,21 @@ module snapmetML
       met_params%precconvrt = ''
       met_params%precstratiaccumv = 'lwe_thickness_of_stratiform_precipitation_amount_acc'
       met_params%precconaccumv = 'lwe_thickness_of_convective_precipitation_amount_acc'
+
+      met_params%t2m = 'air_temperature_2m'
+      met_params%xflux = 'eastward_surface_stress'
+      met_params%xflux_is_accumulated = .true.
+      met_params%yflux = 'northward_surface_stress'
+      met_params%yflux_is_accumulated = .true.
+      met_params%z0 = ""
+      met_params%hflux = 'surface_upward_sensible_heat_flux_acc'
+      met_params%hflux_is_accumulated = .true.
+      met_params%hflux_is_downward = .true.  ! netcdf name in ecmwf database is upward, but data follows database convention and is downward... See codes.ecmwf.int/grib/param-db/146
 !..get grid parameters from field identification
+      met_params%mass_fraction_cloud_condensed_water_in_air = "cloudwater"
+      met_params%mass_fraction_cloud_ice_in_air = ""
+
+      met_params%cloud_fraction = "3D_cloudcover"
     case('era5')
       met_params%manual_level_selection = .true.
       met_params%has_dummy_dim = .false.
@@ -296,21 +301,24 @@ module snapmetML
       met_params%precconvrt = ''
 
       met_params%t2m = 'air_temperature_2m'
-      met_params%xflux = 'downward_northward_momentum_flux_in_air'
+      met_params%xflux = 'downward_eastward_momentum_flux_in_air'
       met_params%xflux_is_accumulated = .true.
-      met_params%yflux = 'downward_eastward_momentum_flux_in_air'
+      met_params%yflux = 'downward_northward_momentum_flux_in_air'
       met_params%yflux_is_accumulated = .true.
+
       ! met_params%z0 = 'surface_roughness_length'
       met_params%z0 = "SFX_Z0"
       met_params%hflux = 'integral_of_surface_downward_sensible_heat_flux_wrt_time'
       met_params%hflux_is_accumulated = .true.
+      met_params%hflux_is_downward = .true.
 
       met_params%mass_fraction_rain_in_air = "mass_fraction_of_rain_in_air_ml"
       met_params%mass_fraction_graupel_in_air = "mass_fraction_of_graupel_in_air_ml"
       met_params%mass_fraction_snow_in_air = "mass_fraction_of_snow_in_air_ml"
 
       met_params%mass_fraction_cloud_condensed_water_in_air = "mass_fraction_of_cloud_condensed_water_in_air_ml"
-      met_params%mass_fraction_cloud_ice_in_air = "mass_fraction_of_cloud_ice_in_air_ml"
+      met_params%mass_fraction_cloud_ice_in_air = '' ! Negligible cloud ice in AROME data. 
+                                                     ! Originally: "mass_fraction_of_cloud_ice_in_air_ml" 
 
       met_params%cloud_fraction = "cloud_area_fraction_ml"
 !..get grid parameters from field identification
@@ -383,15 +391,17 @@ module snapmetML
       met_params%z0 = ''
 
       met_params%hflux = 'surface_flux_sensible_heat'
+      met_params%hflux_is_accumulated = .false.
+      met_params%hflux_is_downward = .true.
+      
+      met_params%mass_fraction_rain_in_air = ""
+      met_params%mass_fraction_graupel_in_air = ""
+      met_params%mass_fraction_snow_in_air = ""
 
-      met_params%mass_fraction_rain_in_air = "mass_fraction_of_rain_in_air_ml"
-      met_params%mass_fraction_graupel_in_air = "mass_fraction_of_graupel_in_air_ml"
-      met_params%mass_fraction_snow_in_air = "mass_fraction_of_snow_in_air_ml"
+      met_params%mass_fraction_cloud_condensed_water_in_air = "cloudwater"
+      met_params%mass_fraction_cloud_ice_in_air = ""
 
-      met_params%mass_fraction_cloud_condensed_water_in_air = "mass_fraction_of_cloud_condensed_water_in_air_ml"
-      met_params%mass_fraction_cloud_ice_in_air = "mass_fraction_of_cloud_ice_in_air_ml"
-
-      met_params%cloud_fraction = "cloud_area_fraction_ml"
+      met_params%cloud_fraction = "3D_cloudcover"
 !..get grid parameters from field identification
 ! set as long as sortfield still is called
     case('gfs_grib_filter_fimex')

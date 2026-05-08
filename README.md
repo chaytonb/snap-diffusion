@@ -33,7 +33,7 @@ from the NOAA GFS model can be found under [src/naccident/examples/gfs/](./src/n
 SNAP requires the following libraries and programs to be installed for
 compilation
 
- * fortran77/90 compiler, e.g. gfortran or ifort
+ * fortran compiler with support for Fortran2008, e.g. gfortran or ifort
  * NetCDF (netcdf > 4.1.1)
  * NetCDF-fortran
  * Python3 (optional)
@@ -79,7 +79,7 @@ env VERSION="some_version_number" make install
 
 ```
 SNAP: Servere Nuclear Accident Programme
-Copyright (C) 1992-2023  Norwegian Meteorological Institute
+Copyright (C) 1992-2026  Norwegian Meteorological Institute
 
 SNAP is free software: you can
 redistribute it and/or modify it under the terms of the

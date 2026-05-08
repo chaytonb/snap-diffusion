@@ -1,8 +1,7 @@
 ! SNAP: Servere Nuclear Accident Programme
 ! Copyright (C) 1992-2026   Norwegian Meteorological Institute
-! License: GNU GPL v3 or later
 
-! SNAP - Severe Nuclear Accident Program
+! License: GNU General Public License Version 3 (GNU GPL-3.0)
 
 !-----------------------
 ! Options in snap.input:
@@ -15,8 +14,10 @@
 ! TIME.RELEASE=      12h
 ! TITLE=  This is a optional title
 ! SET_RELEASE.POS=   P.1
-! RANDOM.WALK.ON
+! RANDOM.WALK.ON (default)
 ! RANDOM.WALK.OFF
+! FORWARD.ON (default)
+! FORWARD.OFF
 ! BOUNDARY.LAYER.FULL.MIX.OFF
 ! BOUNDARY.LAYER.FULL.MIX.ON
 ! DRY.DEPOSITION.OLD  * deprecated
@@ -25,7 +26,7 @@
 ! DRY.DEPOSITION.SAVE
 ! DRY.DEPOSITION.LARGEST_LANDFRACTION_FILE = "landclasses.nc"
 ! WET.DEPOSITION.NEW ! deprecated
-! WET.DEPOSITION.SCHEME = Bartnicki ! (default) bartnicki-takemura
+! WET.DEPOSITION.SCHEME = Bartnicki / Bartnicki-Takemura ! Default: Undefined
 ! WET.DEPOSITION.SAVE  ! Outputs wet scavenging rate (for 3D output only)
 ! TIME.STEP= 900.
 ! TIME.RELEASE.PROFILE.CONSTANT
@@ -133,6 +134,10 @@
 ! OUTPUT.COLUMN_MAX_CONC.DISABLE
 ! * Output column concentration (height independent)
 ! OUTPUT.COLUMN.ON
+! * Output gaussian smoothing parameters for dry-dep and concs
+! * the kernel-size (1=off, 3,5,7,...) determines max-distance of smoothing
+! * the maxHR determines the age-factor, e.g. 48h will give max-smoothing at ~ 5*48h
+! OUTPUT.GAUSSIAN_SMOOTHING.MAXHR,SIZE= <hours>, <kernel-size>
 ! * Computing dosimetry for occupants of aircraft flying through plumes
 ! OUTPUT.AIRCRAFT_DOSERATE.ENABLE
 ! OUTPUT.AIRCRAFT_DOSERATE.DISABLE * default
@@ -185,24 +190,18 @@ PROGRAM bsnap
   USE checkdomainML, only: check_in_domain
   USE rwalkML, only: rwalk_init, diffusion_scheme, bl_definition, &
                      turbulence_master, eta_to_metres, well_mixed_test
-  USE milibML, only: xyconvert
+  USE milibML, only: xyconvert, GEO_PARAMS
   USE forwrdML, only: forwrd
   USE wetdepML, only: wetdep, wetdep_scheme, wetdep_scheme_t, &
     WETDEP_SUBCLOUD_SCHEME_UNDEFINED, WETDEP_SUBCLOUD_SCHEME_BARTNICKI, &
     WETDEP_INCLOUD_SCHEME_NONE, WETDEP_INCLOUD_SCHEME_TAKEMURA, &
     WETDEP_INCLOUD_SCHEME_UNDEFINED, &
-    operator(==), operator(/=), &
-    wetdep_init => init, wetdep_deinit => deinit
-#if defined(SNAP_EXPERIMENTAL)
-  USE wetdepML, only: WETDEP_SUBCLOUD_SCHEME_CONVENTIONAL, &
-    wet_deposition_conventional_params => conventional_params, &
-    wet_deposition_RATM => RATM_params, &
-    WETDEP_INCLOUD_SCHEME_ROSELLE
-#endif
+    wetdep_init => init
   USE drydepml, only: drydep, drydep_scheme, requires_landfraction_file, &
           DRYDEP_SCHEME_OLD, DRYDEP_SCHEME_NEW, &
           DRYDEP_SCHEME_EMERSON, DRYDEP_SCHEME_UNDEFINED, &
           largest_landfraction_file,  drydep_unload => unload
+  USE gaussian_smoothingML, only: build_age_gaussian_kernel, initialize_gaussian_smoothing
   USE decayML, only: decay, decayDeps
   USE posintML, only: posint
   USE releaseML, only: release, releases, tpos_bomb, nrelheight, mprel, &
@@ -237,9 +236,6 @@ PROGRAM bsnap
   type(datetime_t) :: itime, itimei, itimeo
   type(datetime_t) :: time_file
 
-!..used in xyconvert (longitude,latitude -> x,y)
-  real, save :: geoparam(6) = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0]
-
   integer :: snapinput_unit, ios
   integer :: nhrun = 0, nhrel = 0
   logical :: use_random_walk = .true.
@@ -247,6 +243,8 @@ PROGRAM bsnap
   logical :: autodetect_grid_params = .false.
   integer :: m, np, npl, nlevel, ifltim = 0
   logical :: synoptic_output = .false.
+  integer :: gaussian_smoothing_max_age_hr = 48
+  integer :: gaussian_smoothing_kernel_size = 1 ! one means off
   integer :: k, ierror, i, n
   integer, allocatable :: klevel_manual(:)
   integer :: ih
@@ -276,6 +274,9 @@ PROGRAM bsnap
   integer :: ntprof
   type(duration_t) :: dur
   logical :: out_of_domain
+  real ::lost_activity
+  real, allocatable :: smoothing_kernel(:,:)
+  integer :: last_age_hr = -1, age_hr = -1
   real :: z
   real :: z1, z2
   real :: p1, p2, px
@@ -383,6 +384,12 @@ PROGRAM bsnap
 
 ! initialize random number generator for rwalk and release
   CALL init_random_seed()
+
+! initialize gaussian smoothing
+  write (iulog, "(a,i2,a,i3,a)") "Initializing Gaussian smoothing with kernel size ", gaussian_smoothing_kernel_size, &
+    " and max age ", gaussian_smoothing_max_age_hr, " hours."
+  call initialize_gaussian_smoothing(kernel_size_in=gaussian_smoothing_kernel_size, &
+                                     max_age_hr_in=gaussian_smoothing_max_age_hr)
 
 !..check input FELT files and make sorted lists of available data
 !..make main list based on x wind comp. (u) in upper used level
@@ -510,8 +517,8 @@ PROGRAM bsnap
     write (iulog, *) 'irwalk:  ', use_random_walk
     write (iulog, *) 'iforwd:  ', use_forwrd
     write (iulog, *) 'drydep_scheme: ', drydep_scheme
-    write (iulog, *) 'wetdep_scheme: subcloud scheme:   ', wetdep_scheme%subcloud%description
-    write (iulog, *) 'wetdep_scheme: incloud  scheme:   ', wetdep_scheme%incloud%description
+    write (iulog, *) 'wetdep_scheme: subcloud scheme:   ', wetdep_scheme%subcloud
+    write (iulog, *) 'wetdep_scheme: incloud  scheme:   ', wetdep_scheme%incloud
     write (iulog, *) 'wetdep_scheme: use vertical:      ', wetdep_scheme%use_vertical
     write (iulog, *) 'wetdep_scheme: use cloudfraction: ', wetdep_scheme%use_cloudfraction
     write (iulog, *) 'idecay:  ', idecay
@@ -595,7 +602,7 @@ PROGRAM bsnap
     call readfield_and_compute(ftype, -1, nhrun < 0, time_start, nhfmin, nhfmax, &
                    time_file, ierror)
     write (error_unit, fmt="('input data: ',i4,3i3.2)") time_file
-    flush(output_unit)
+    flush(error_unit)
     call input_timer%stop_and_log()
     call swap_fields_after_reading() ! only for async io, but does not hurt otherwise
 
@@ -621,7 +628,7 @@ PROGRAM bsnap
       y = release_positions(irelpos)%geo_latitude
       x = release_positions(irelpos)%geo_longitude
       write (iulog, *) 'release lat,long: ', y, x
-      call xyconvert(1, x, y, 2, geoparam, igtype, gparam, ierror)
+      call xyconvert(1, x, y, 2, GEO_PARAMS, igtype, gparam, ierror)
       if (ierror /= 0) then
         write (iulog, *) 'ERROR: xyconvert'
         write (iulog, *) '   igtype: ', igtype
@@ -631,9 +638,10 @@ PROGRAM bsnap
         write (error_unit, *) '   gparam: ', gparam
         call snap_error_exit(iulog)
       end if
+      ! gparam stores cell centers; (1=center, 0.5 left/lower corner, 1.5= right/upper corner)
       write (iulog, *) 'release   x,y:    ', x, y
-      if (x(1) < 1.01 .OR. x(1) > (nx - 0.01) .OR. &
-          y(1) < 1.01 .OR. y(1) > (ny - 0.01)) then
+      if (x(1) < 1. .OR. x(1) >= nx  .OR. &
+          y(1) < 1. .OR. y(1) >= ny) then
         write (iulog, *) 'ERROR: Release position outside field area'
         write (error_unit, *) 'ERROR: Release position outside field area'
         call snap_error_exit(iulog)
@@ -718,8 +726,8 @@ PROGRAM bsnap
             !$OMP FIRSTPRIVATE(idebug,iulog,itimei, next_input_step,nhrun,nhfmin,nhfmax,nsteph) &
             !$OMP PRIVATE(ierror)
             if (idebug >= 1) then
-              write(*, *) "Starting async read task for step ", next_input_step, nstep, itimei
-              flush(output_unit)
+              write(error_unit, *) "Starting async read task for step ", next_input_step, nstep, itimei
+              flush(error_unit)
             end if
             call input_timer%start()
             call readfield_and_compute(ftype, next_input_step, nhrun < 0, itimei, nhfmin, nhfmax, &
@@ -763,7 +771,7 @@ PROGRAM bsnap
       if (idecay == 1) call decayDeps(tstep)
       ! prepare particle functions once before loop
       if (init) then
-        call wetdep_init(tstep)
+        call wetdep_init()
         if (use_random_walk) call rwalk_init(tstep)
         init = .FALSE.
       end if
@@ -775,136 +783,165 @@ PROGRAM bsnap
 
       call particleloop_timer%start()
       ! particle loop
-      !$OMP PARALLEL DO PRIVATE(pextra,np,m,out_of_domain) SCHEDULE(auto) &
+      !$OMP PARALLEL DO &
+      !$OMP PRIVATE(pextra,np,npl,m,out_of_domain, lost_activity, age_hr, smoothing_kernel) &
+      !$OMP FIRSTPRIVATE(last_age_hr) &
+      !$OMP SCHEDULE(auto) &
       !$OMP REDUCTION(+:total_activity_lost_domain) REDUCTION(MAX:mhmax) REDUCTION(MIN:mhmin)
-      part_do: do np = 1, npart
-        if (.not.pdata(np)%is_active()) cycle part_do
+      plume_do: do npl = 1, nplume
+        age_hr = nint(1.0 * iplume(npl)%ageInSteps / nsteph)
+        if (age_hr /= last_age_hr) then
+          last_age_hr = age_hr
+          call build_age_gaussian_kernel(last_age_hr, smoothing_kernel)
+        end if
+        part_do:  do np = iplume(npl)%start, iplume(npl)%end
+          lost_activity = 0.0
+          if (.not.pdata(np)%is_active()) cycle part_do
 
-        !..interpolation of boundary layer top, height, precipitation etc.
-        !  creates and save temporary data to pextra%prc, pextra%rmx, pextra%rmy
-        call posint(pdata(np), rt1, rt2, pextra)
+          !..interpolation of boundary layer top, height, precipitation etc.
+          !  creates and save temporary data to pextra%prc, pextra%rmx, pextra%rmy
+          call posint(pdata(np), rt1, rt2, pextra)
 
-        !..radioactive decay
-        if (idecay == 1) call decay(pdata(np))
+          !..radioactive decay
+          if (idecay == 1) call decay(pdata(np))
 
-        !..dry deposition
-        call drydep(tstep, pdata(np))
+          !..dry deposition
+          call drydep(tstep, pdata(np), smoothing_kernel, lost_activity)
 
-        !..wet deposition
-        call wetdep(tstep, pdata(np), pextra)
+          !..wet deposition
+          call wetdep(tstep, pdata(np), pextra)
 
-        ! find eta coordinate of 600metres at particle location
-        if (bl_definition == 'constant') then
-          pdata(np)%hbl = 600
+          ! find eta coordinate of 600metres at particle location
+          if (bl_definition == 'constant') then
+            pdata(np)%hbl = 600
 
-          i = pdata(np)%x
-          j = pdata(np)%y
-          z = pdata(np)%hbl
+            i = pdata(np)%x
+            j = pdata(np)%y
+            z = pdata(np)%hbl
 
-          do k = 2, nk-1
-            if (z < hlevel2(i,j,k+1)) exit
-          end do
-          k = max(1, min(k, nk-1))
-
-          z1 = hlevel2(i,j,k)
-          z2 = hlevel2(i,j,k+1)
-
-          p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
-          p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
-
-          if (p1 > 0.0 .and. p2 > 0.0) then
-            px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
-            frac = (px - p1) / (p2 - p1)
-          else
-            frac = (z - z1) / (z2 - z1)
-          end if
-          frac = max(0.0, min(1.0, frac))
-
-          pdata(np)%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
-        endif
-
-        !..move all particles forward, save u and v to pextra
-
-        !..apply the random walk method (diffusion)
-        ! diffusion is applied after deposition to mix
-        ! before output (which computes surface concentrations)
-
-        if (adaptive_timesteps) then
-          if (pdata(np)%z.gt.pdata(np)%tbl .OR. diffusion_scheme == 'random_walk_name') then ! Inside BL: adaptive substepping
-            t_local = 0.0
-            do while (t_local < tstep)
-
-              ! Interpolate
-              if (t_local /= 0) then
-                rt1=(tf2-(tnow+t_local))/(tf2-tf1)
-                rt2=((tnow+t_local)-tf1)/(tf2-tf1)
-                call posint(pdata(np), rt1, rt2, pextra)
-              endif
-
-              ! Enforce timesteps 1/10 of the vertical lagrangian timescale
-              pdata(np)%ptstep = pdata(np)%tlw * 0.1
-              pdata(np)%ptstep = max(pdata(np)%ptstep, dt_min) ! enforce minimum size for steps
-              
-              ! Ensure it does not exceed the global timestep window
-              pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
-
-              if (.not.well_mixed_test) then
-                call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
-              endif
-
-              call turbulence_master(blfullmix, pdata(np), pextra)
-
-              call check_in_domain(pdata(np), out_of_domain)
-              if (out_of_domain) then
-                m = def_comp(pdata(np)%icomp)%to_output
-                total_activity_lost_domain(m) = &
-                  total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
-              endif
-
-              t_local = t_local + pdata(np)%ptstep
-
-              if (pdata(np)%z.lt.pdata(np)%tbl .AND. diffusion_scheme /= 'random_walk_name') then
-                ! moved out of BL: break and finish tstep above BL
-                ! Always use small timesteps for NAME
-                exit
-              endif
-
+            do k = 2, nk-1
+              if (z < hlevel2(i,j,k+1)) exit
             end do
+            k = max(1, min(k, nk-1))
 
-            if (t_local < tstep) then ! If particle leaves BL, finish whole step
-              pdata(np)%ptstep = tstep - t_local
+            z1 = hlevel2(i,j,k)
+            z2 = hlevel2(i,j,k+1)
 
-              ! Interpolate
-              if (t_local /= 0) then
-                rt1=(tf2-(tnow+t_local))/(tf2-tf1)
-                rt2=((tnow+t_local)-tf1)/(tf2-tf1)
-                call posint(pdata(np), rt1, rt2, pextra)
+            p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
+            p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
+
+            if (p1 > 0.0 .and. p2 > 0.0) then
+              px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
+              frac = (px - p1) / (p2 - p1)
+            else
+              frac = (z - z1) / (z2 - z1)
+            end if
+            frac = max(0.0, min(1.0, frac))
+
+            pdata(np)%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
+          endif
+
+
+          !..apply the random walk method (diffusion)
+          ! diffusion is applied after deposition to mix
+          ! before output (which computes surface concentrations)
+
+          if (adaptive_timesteps) then
+            if (pdata(np)%z.gt.pdata(np)%tbl .OR. diffusion_scheme == 'random_walk_name') then ! Inside BL: adaptive substepping
+              t_local = 0.0
+              do while (t_local < tstep)
+
+                ! Interpolate
+                if (t_local /= 0) then
+                  rt1=(tf2-(tnow+t_local))/(tf2-tf1)
+                  rt2=((tnow+t_local)-tf1)/(tf2-tf1)
+                  call posint(pdata(np), rt1, rt2, pextra)
+                endif
+
+                ! Enforce timesteps 1/10 of the vertical lagrangian timescale
+                pdata(np)%ptstep = pdata(np)%tlw * 0.1
+                pdata(np)%ptstep = max(pdata(np)%ptstep, dt_min) ! enforce minimum size for steps
+                
+                ! Ensure it does not exceed the global timestep window
+                pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
+
+                if (.not.well_mixed_test) then
+                  call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+                endif
+
+                call turbulence_master(blfullmix, pdata(np), pextra)
+
+                call check_in_domain(pdata(np), out_of_domain)
+                if (out_of_domain) then
+                  m = def_comp(pdata(np)%icomp)%to_output
+                  total_activity_lost_domain(m) = &
+                    total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
+                endif
+
+                t_local = t_local + pdata(np)%ptstep
+
+                if (pdata(np)%z.lt.pdata(np)%tbl .AND. diffusion_scheme /= 'random_walk_name') then
+                  ! moved out of BL: break and finish tstep above BL
+                  ! Always use small timesteps for NAME
+                  exit
+                endif
+
+              end do
+
+              if (t_local < tstep) then ! If particle leaves BL, finish whole step
+                pdata(np)%ptstep = tstep - t_local
+
+                ! Interpolate
+                if (t_local /= 0) then
+                  rt1=(tf2-(tnow+t_local))/(tf2-tf1)
+                  rt2=((tnow+t_local)-tf1)/(tf2-tf1)
+                  call posint(pdata(np), rt1, rt2, pextra)
+                endif
+
+                if (.not.well_mixed_test) then
+                  call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+                endif
+
+                call turbulence_master(blfullmix, pdata(np), pextra)
+
+                call check_in_domain(pdata(np), out_of_domain)
+                if (out_of_domain) then
+                  m = def_comp(pdata(np)%icomp)%to_output
+                  total_activity_lost_domain(m) = &
+                    total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
+                endif
+                
+                t_local = t_local + pdata(np)%ptstep
+
               endif
+
+            else ! Already above BL: do a single full step
+              pdata(np)%ptstep = tstep
 
               if (.not.well_mixed_test) then
-                call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+                call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
               endif
-
-              call turbulence_master(blfullmix, pdata(np), pextra)
-
+              
+              if (use_random_walk) then
+                call turbulence_master(blfullmix, pdata(np), pextra)
+              endif
+              
+              !.. check domain (%active) after moving particle
               call check_in_domain(pdata(np), out_of_domain)
               if (out_of_domain) then
                 m = def_comp(pdata(np)%icomp)%to_output
                 total_activity_lost_domain(m) = &
                   total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
               endif
-              
-              t_local = t_local + pdata(np)%ptstep
-
             endif
 
-          else ! Already above BL: do a single full step
+          else ! adaptive_timesteps == .false.: always full step
             pdata(np)%ptstep = tstep
 
             if (.not.well_mixed_test) then
               call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
             endif
-            
+
             if (use_random_walk) then
               call turbulence_master(blfullmix, pdata(np), pextra)
             endif
@@ -918,32 +955,12 @@ PROGRAM bsnap
             endif
           endif
 
-        else ! adaptive_timesteps == .false.: always full step
-          pdata(np)%ptstep = tstep
-
-          if (.not.well_mixed_test) then
-            call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
-          endif
-
-          if (use_random_walk) then
-            call turbulence_master(blfullmix, pdata(np), pextra)
-          endif
-          
-          !.. check domain (%active) after moving particle
-          call check_in_domain(pdata(np), out_of_domain)
-          if (out_of_domain) then
-            m = def_comp(pdata(np)%icomp)%to_output
-            total_activity_lost_domain(m) = &
-              total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
-          endif
-        endif
-
-        if (pdata(np)%is_active()) then
-          if (pdata(np)%hbl > mhmax) mhmax = pdata(np)%hbl
-          if (pdata(np)%hbl < mhmin) mhmin = pdata(np)%hbl
-        end if
-
-      end do part_do
+          if (pdata(np)%is_active()) then
+            if (pdata(np)%hbl > mhmax) mhmax = pdata(np)%hbl
+            if (pdata(np)%hbl < mhmin) mhmin = pdata(np)%hbl
+          end if
+        end do part_do
+      end do plume_do
       !$OMP END PARALLEL DO
       call particleloop_timer%stop_and_log()
 
@@ -1006,14 +1023,14 @@ PROGRAM bsnap
         end if
         if (fldtype == "netcdf" .and. ifldout == 1) then
           !$OMP TASKWAIT
-          call fldout_nc(fldfilX, itimeo, tf1, tf2, tnext, &
+          call fldout_nc(fldfilX, itimeo, tf1, tf2, tnext, nsteph, &
                          ierror)
         endif
         if (ierror /= 0) call snap_error_exit(iulog)
       else
         if (fldtype == "netcdf" .and. ifldout == 1) then
           !$OMP TASKWAIT
-          call fldout_nc(fldfilX, itimeo, tf1, tf2, tnext, &
+          call fldout_nc(fldfilX, itimeo, tf1, tf2, tnext, nsteph, &
                          ierror)
         endif
         if (ierror /= 0) call snap_error_exit(iulog)
@@ -1038,7 +1055,6 @@ PROGRAM bsnap
     call snap_error_exit(iulog)
   end if
   write(error_unit, *) 'npart: Used a maximum of ', npartmax, ' out of available ', mpart
-  write(output_unit, *) 'npart: Used a maximum of ', npartmax, ' out of available ', mpart
 
   ! b_240311
   write (error_unit, *)
@@ -1061,7 +1077,6 @@ PROGRAM bsnap
   call fldout_unload()
 
 ! deallocate all fields
-  call wetdep_deinit()
   call drydep_unload()
   CALL deAllocateFields()
 
@@ -1339,7 +1354,7 @@ contains
         if (has_value) then
           read(cinput(pname_start:pname_end),*) surface_height_m
           if (surface_height_m <= 0.0) then
-            write(*,*) "surface.layer.concentration.at.height must be positive"
+            write(error_unit,*) "surface.layer.concentration.at.height must be positive"
             goto 12
           endif
         endif
@@ -1425,22 +1440,7 @@ contains
             .false., &
             .false.)
         end block
-#if defined(SNAP_EXPERIMENTAL)
-      case ('wet.deposition.conventional.a')
-        if (wet_deposition_conventional_params%A /= 0.0) then
-            write(error_unit,*) "wet deposition parameter already set"
-            goto 12
-        endif
-        if (.not.has_value) goto 12
-        read(cinput(pname_start:pname_end), *) wet_deposition_conventional_params%A
-      case ('wet.deposition.conventional.b')
-        if (wet_deposition_conventional_params%B /= 0.0) then
-            write(error_unit,*) "wet deposition parameter already set"
-            goto 12
-        endif
-        if (.not.has_value) goto 12
-        read(cinput(pname_start:pname_end), *) wet_deposition_conventional_params%B
-#endif
+
       case ('wet.deposition.scheme')
         if (.not.has_value) goto 12
         if (wetdep_scheme%subcloud /= WETDEP_SUBCLOUD_SCHEME_UNDEFINED .or. &
@@ -1455,7 +1455,7 @@ contains
               WETDEP_SUBCLOUD_SCHEME_BARTNICKI, &
               WETDEP_INCLOUD_SCHEME_NONE, &
               .false., .false. &
-            )
+              )
           case("bartnicki-takemura")
             met_params%use_3d_precip = .true.
             met_params%use_ccf = .true.
@@ -1463,60 +1463,10 @@ contains
               WETDEP_SUBCLOUD_SCHEME_BARTNICKI, &
               WETDEP_INCLOUD_SCHEME_TAKEMURA, &
               .true., .true. &
-            )
-          case("bartnicki-vertical")
-            met_params%use_3d_precip = .true.
-            met_params%use_ccf = .true.
-            wetdep_scheme = wetdep_scheme_t( &
-              WETDEP_SUBCLOUD_SCHEME_BARTNICKI, &
-              WETDEP_INCLOUD_SCHEME_NONE, &
-              .true., .true. &
-            )
-#if defined(SNAP_EXPERIMENTAL)
-          case("conventional")
-            wetdep_scheme = wetdep_scheme_t( &
-              WETDEP_SUBCLOUD_SCHEME_CONVENTIONAL, &
-              WETDEP_INCLOUD_SCHEME_NONE, &
-              .false., .false. &
-            )
-          case("bartnicki-roselle")
-            met_params%use_3d_precip = .true.
-            met_params%use_ccf = .true.
-            wetdep_scheme = wetdep_scheme_t( &
-              WETDEP_SUBCLOUD_SCHEME_BARTNICKI, &
-              WETDEP_INCLOUD_SCHEME_ROSELLE, &
-              .true., .true. &
-            )
-          case("ratm-roselle")
-            if (wet_deposition_conventional_params%A /= 0.0 .or. &
-                wet_deposition_conventional_params%B /= 0.0) then
-                write(error_unit,*) "wet deposition parameter already set"
-                goto 12
-            endif
-            wet_deposition_conventional_params = wet_deposition_RATM
-            met_params%use_3d_precip = .true.
-            met_params%use_ccf = .true.
-            wetdep_scheme = wetdep_scheme_t( &
-              WETDEP_SUBCLOUD_SCHEME_CONVENTIONAL, &
-              WETDEP_INCLOUD_SCHEME_ROSELLE, &
-              .true., .true. &
-            )
-          case("ratm-takemura")
-            if (wet_deposition_conventional_params%A /= 0.0 .or. &
-                wet_deposition_conventional_params%B /= 0.0) then
-                write(error_unit,*) "wet deposition parameter already set"
-                goto 12
-            endif
-            wet_deposition_conventional_params = wet_deposition_RATM
-            met_params%use_3d_precip = .true.
-            met_params%use_ccf = .true.
-            wetdep_scheme = wetdep_scheme_t( &
-              WETDEP_SUBCLOUD_SCHEME_CONVENTIONAL, &
-              WETDEP_INCLOUD_SCHEME_TAKEMURA, &
-              .true., .true. &
-            )
-#endif
+              )
+
           case default
+            !> No default - should always have scheme in input
             write(error_unit,*) "Unknown scheme ", cinput(pname_start:pname_end)
             goto 12
         end select
@@ -1881,6 +1831,12 @@ contains
       case ('asynoptic.output')
         !..asynoptic.output ... output at fixed intervals after start
         synoptic_output = .false.
+      case ('output.gaussian_smoothing.maxhr,size')
+        !..output.gaussian_smoothing.maxHR,SIZE=<hours>, kernel-size
+        if (.not. has_value) goto 12
+        !.. read two integer values, first maxHr, second kernel size
+        read (cinput(pname_start:pname_end), *, err=12) gaussian_smoothing_max_age_hr, &
+          gaussian_smoothing_kernel_size
       case ('total.components.off')
         !..total.components.off
         itotcomp = 0
@@ -2047,8 +2003,9 @@ contains
             write (error_unit, *) 'interpolation input wrong:', trim(fimex_interpolation)
             ierror = 1
           else
-            write(error_unit,*) "interpolation enabled:", fint%method, trim(fint%proj), trim(fint%x_axis), &
-              trim(fint%y_axis), fint%unit_is_degree
+            write(error_unit,*) "interpolation enabled:", fint%method, trim(fint%proj), &
+              trim(fint%x_axis), "|", &
+              trim(fint%y_axis), "|", fint%unit_is_degree
           end if
         else
           write(error_unit,*) "fimex.interpolation ignored when field.type not fimex: ", trim(ftype)
@@ -2434,16 +2391,6 @@ contains
 
     if (drydep_scheme == DRYDEP_SCHEME_UNDEFINED) drydep_scheme = DRYDEP_SCHEME_OLD
 
-    ! Set default wetdep schemes
-    if (wetdep_scheme%subcloud == WETDEP_SUBCLOUD_SCHEME_UNDEFINED .and. &
-        wetdep_scheme%incloud == WETDEP_INCLOUD_SCHEME_UNDEFINED) then
-        wetdep_scheme = wetdep_scheme_t( &
-          WETDEP_SUBCLOUD_SCHEME_BARTNICKI, &
-          WETDEP_INCLOUD_SCHEME_NONE, &
-          .false., .false. &
-        )
-    endif
-
     i1 = 0
     idecay = 0
 
@@ -2480,9 +2427,9 @@ contains
       end if
 
       if (wetdep_scheme%subcloud == WETDEP_SUBCLOUD_SCHEME_BARTNICKI .AND. def_comp(m)%kwetdep == 1) then
+        ! If any wetdep scheme chosen, then check radius of particle is above zero
         if (def_comp(m)%radiusmym <= 0.) then
-          write (error_unit, *) 'Wet deposition error. radius: ', &
-            def_comp(m)%radiusmym
+          write (error_unit, *) 'Wet deposition error. radius: ', def_comp(m)%radiusmym
           ierror = 1
         end if
       end if
