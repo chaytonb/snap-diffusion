@@ -183,7 +183,7 @@ PROGRAM bsnap
   USE rmpartML, only: rmpart
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
-  USE rwalkML, only: rwalk_init, diffusion_scheme, bl_definition, record_stats, &
+  USE rwalkML, only: rwalk_init, diffusion_scheme, bl_definition, &
                      turbulence_master, eta_to_metres, well_mixed_test
   USE milibML, only: xyconvert
   USE forwrdML, only: forwrd
@@ -243,6 +243,7 @@ PROGRAM bsnap
   integer :: snapinput_unit, ios
   integer :: nhrun = 0, nhrel = 0
   logical :: use_random_walk = .true.
+  logical :: use_forwrd = .true.
   logical :: autodetect_grid_params = .false.
   integer :: m, np, npl, nlevel, ifltim = 0
   logical :: synoptic_output = .false.
@@ -279,6 +280,7 @@ PROGRAM bsnap
   real :: z1, z2
   real :: p1, p2, px
   real :: frac
+  real :: dt_min = 1 ! minimum timestep size for adaptive timestepping
 
   real :: mhmin, mhmax  ! minimum and maximum of mixing height
 !> Information for reading from a releasefile
@@ -506,6 +508,7 @@ PROGRAM bsnap
     write (iulog, *) 'mprel:   ', mprel
     write (iulog, *) 'ifltim:  ', ifltim
     write (iulog, *) 'irwalk:  ', use_random_walk
+    write (iulog, *) 'iforwd:  ', use_forwrd
     write (iulog, *) 'drydep_scheme: ', drydep_scheme
     write (iulog, *) 'wetdep_scheme: subcloud scheme:   ', wetdep_scheme%subcloud%description
     write (iulog, *) 'wetdep_scheme: incloud  scheme:   ', wetdep_scheme%incloud%description
@@ -790,112 +793,136 @@ PROGRAM bsnap
         !..wet deposition
         call wetdep(tstep, pdata(np), pextra)
 
+        ! find eta coordinate of 600metres at particle location
+        if (bl_definition == 'constant') then
+          pdata(np)%hbl = 600
+
+          i = pdata(np)%x
+          j = pdata(np)%y
+          z = pdata(np)%hbl
+
+          do k = 2, nk-1
+            if (z < hlevel2(i,j,k+1)) exit
+          end do
+          k = max(1, min(k, nk-1))
+
+          z1 = hlevel2(i,j,k)
+          z2 = hlevel2(i,j,k+1)
+
+          p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
+          p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
+
+          if (p1 > 0.0 .and. p2 > 0.0) then
+            px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
+            frac = (px - p1) / (p2 - p1)
+          else
+            frac = (z - z1) / (z2 - z1)
+          end if
+          frac = max(0.0, min(1.0, frac))
+
+          pdata(np)%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
+        endif
+
         !..move all particles forward, save u and v to pextra
 
         !..apply the random walk method (diffusion)
         ! diffusion is applied after deposition to mix
         ! before output (which computes surface concentrations)
 
-        if (adaptive_timesteps) then 
-          t_local = 0.0
-          do while (t_local < tstep)
+        if (adaptive_timesteps) then
+          if (pdata(np)%z.gt.pdata(np)%tbl .OR. diffusion_scheme == 'random_walk_name') then ! Inside BL: adaptive substepping
+            t_local = 0.0
+            do while (t_local < tstep)
 
-            ! Interpolate
-            if (t_local /= 0) then
-              rt1=(tf2-(tnow+t_local))/(tf2-tf1)
-              rt2=((tnow+t_local)-tf1)/(tf2-tf1)
-              call posint(pdata(np), rt1, rt2, pextra)
+              ! Interpolate
+              if (t_local /= 0) then
+                rt1=(tf2-(tnow+t_local))/(tf2-tf1)
+                rt2=((tnow+t_local)-tf1)/(tf2-tf1)
+                call posint(pdata(np), rt1, rt2, pextra)
+              endif
+
+              ! Enforce timesteps 1/10 of the vertical lagrangian timescale
+              pdata(np)%ptstep = pdata(np)%tlw * 0.1
+              pdata(np)%ptstep = max(pdata(np)%ptstep, dt_min) ! enforce minimum size for steps
+              
+              ! Ensure it does not exceed the global timestep window
+              pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
+
+              if (.not.well_mixed_test) then
+                call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+              endif
+
+              call turbulence_master(blfullmix, pdata(np), pextra)
+
+              call check_in_domain(pdata(np), out_of_domain)
+              if (out_of_domain) then
+                m = def_comp(pdata(np)%icomp)%to_output
+                total_activity_lost_domain(m) = &
+                  total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
+              endif
+
+              t_local = t_local + pdata(np)%ptstep
+
+              if (pdata(np)%z.lt.pdata(np)%tbl .AND. diffusion_scheme /= 'random_walk_name') then
+                ! moved out of BL: break and finish tstep above BL
+                ! Always use small timesteps for NAME
+                exit
+              endif
+
+            end do
+
+            if (t_local < tstep) then ! If particle leaves BL, finish whole step
+              pdata(np)%ptstep = tstep - t_local
+
+              ! Interpolate
+              if (t_local /= 0) then
+                rt1=(tf2-(tnow+t_local))/(tf2-tf1)
+                rt2=((tnow+t_local)-tf1)/(tf2-tf1)
+                call posint(pdata(np), rt1, rt2, pextra)
+              endif
+
+              if (.not.well_mixed_test) then
+                call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+              endif
+
+              call turbulence_master(blfullmix, pdata(np), pextra)
+
+              call check_in_domain(pdata(np), out_of_domain)
+              if (out_of_domain) then
+                m = def_comp(pdata(np)%icomp)%to_output
+                total_activity_lost_domain(m) = &
+                  total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
+              endif
+              
+              t_local = t_local + pdata(np)%ptstep
+
             endif
 
-            ! find eta coordinate of 600metres at particle location
-            if (bl_definition == 'constant') then
-              pdata(np)%hbl = 600
-
-              i = pdata(np)%x
-              j = pdata(np)%y
-              z = pdata(np)%hbl
-
-              do k = 2, nk-1
-                if (z < hlevel2(i,j,k+1)) exit
-              end do
-              k = max(1, min(k, nk-1))
-
-              z1 = hlevel2(i,j,k)
-              z2 = hlevel2(i,j,k+1)
-
-              p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
-              p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
-
-              if (p1 > 0.0 .and. p2 > 0.0) then
-                px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
-                frac = (px - p1) / (p2 - p1)
-              else
-                frac = (z - z1) / (z2 - z1)
-              end if
-
-              frac = max(0.0, min(1.0, frac))
-
-              pdata(np)%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
-            endif
-
-            ! Enforce timesteps 1/10 of the vertical lagrangian timescale
-            pdata(np)%ptstep = pdata(np)%tlw * 0.1
-            
-            ! Ensure it does not exceed the global timestep window
-            pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
+          else ! Already above BL: do a single full step
+            pdata(np)%ptstep = tstep
 
             if (.not.well_mixed_test) then
-              call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+              call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
             endif
-
-            call turbulence_master(blfullmix, pdata(np), pextra)
-
+            
+            if (use_random_walk) then
+              call turbulence_master(blfullmix, pdata(np), pextra)
+            endif
+            
+            !.. check domain (%active) after moving particle
             call check_in_domain(pdata(np), out_of_domain)
             if (out_of_domain) then
               m = def_comp(pdata(np)%icomp)%to_output
               total_activity_lost_domain(m) = &
                 total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
             endif
+          endif
 
-            t_local = t_local + pdata(np)%ptstep
-          end do
-
-        else
+        else ! adaptive_timesteps == .false.: always full step
           pdata(np)%ptstep = tstep
 
           if (.not.well_mixed_test) then
             call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
-          endif
-
-          ! find eta coordinate of 600metres at particle location
-          if (bl_definition == 'constant') then
-            pdata(np)%hbl = 600
-
-            i = pdata(np)%x
-            j = pdata(np)%y
-            z = pdata(np)%hbl
-
-            do k = 2, nk-1
-              if (z < hlevel2(i,j,k+1)) exit
-            end do
-            k = max(1, min(k, nk-1))
-
-            z1 = hlevel2(i,j,k)
-            z2 = hlevel2(i,j,k+1)
-
-            p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
-            p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
-
-            if (p1 > 0.0 .and. p2 > 0.0) then
-              px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
-              frac = (px - p1) / (p2 - p1)
-            else
-              frac = (z - z1) / (z2 - z1)
-            end if
-
-            frac = max(0.0, min(1.0, frac))
-
-            pdata(np)%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
           endif
 
           if (use_random_walk) then
@@ -905,7 +932,6 @@ PROGRAM bsnap
           !.. check domain (%active) after moving particle
           call check_in_domain(pdata(np), out_of_domain)
           if (out_of_domain) then
-            write(*,*) 'ood'
             m = def_comp(pdata(np)%icomp)%to_output
             total_activity_lost_domain(m) = &
               total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
@@ -916,6 +942,7 @@ PROGRAM bsnap
           if (pdata(np)%hbl > mhmax) mhmax = pdata(np)%hbl
           if (pdata(np)%hbl < mhmin) mhmin = pdata(np)%hbl
         end if
+
       end do part_do
       !$OMP END PARALLEL DO
       call particleloop_timer%stop_and_log()
@@ -1266,12 +1293,13 @@ contains
       case ('random.walk.off')
         !..random.walk.off
         use_random_walk = .false.
+      case ('forward.on')
+        use_forwrd = .true.
+      case ('forward.off')
+        use_forwrd = .false.
       case ('diffusion.scheme')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) diffusion_scheme
-      case ('record.stats')
-        if (.not. has_value) goto 12
-        read(cinput(pname_start:pname_end),*) record_stats
       case ('bl.definition')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) bl_definition

@@ -48,7 +48,8 @@ module readfieldML
     USE datetime, only: datetime_t
     USE snapdebug, only: iulog, idebug
     USE snapgrdML, only: gparam, igtype
-    USE rwalkML, only: diffusion_fields, air_density, interp_tke_to_hybrid_field
+    USE rwalkML, only: diffusion_fields, air_density, interp_tke_to_hybrid_field, bl_definition, &
+                       diffusion_scheme
 
     USE iso_fortran_env, only: error_unit
 !> file type (netcdf or fimex)
@@ -80,13 +81,21 @@ module readfieldML
 
     !..compute model level heights
     call compheight
-    !..calculate boundary layer (top and height)
-    call bldp
 
-!.. Calculate fields required for advanced diffusion
-    call air_density
-    call diffusion_fields
-    call interp_tke_to_hybrid_field
+    !..calculate boundary layer (top and height)
+    if (bl_definition /= 'get_bl_from_meteo' .and. bl_definition /= 'constant') then
+        call bldp
+    endif
+
+    if (diffusion_scheme == 'variable_k' .OR. diffusion_scheme == 'random_walk_flexpart'  &
+            .OR. diffusion_scheme == 'random_walk_name' .OR. diffusion_scheme == 'TKE') then
+        call air_density 
+        call diffusion_fields
+    endif
+
+    if (diffusion_scheme == 'TKE') then
+        call interp_tke_to_hybrid_field
+    endif
 
   end subroutine readfield_and_compute
 

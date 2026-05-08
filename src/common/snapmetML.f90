@@ -213,7 +213,7 @@ module snapmetML
       met_params%ptopv = ''
       met_params%apv = 'ap'
       met_params%bv = 'b'
-      met_params%sigmadotv = 'etadot' !'lagrangian_tendency_of_atmosphere_sigma_coordinate_ml'
+      met_params%sigmadotv = ''!'etadot' !'lagrangian_tendency_of_atmosphere_sigma_coordinate_ml'
       met_params%sigmadot_is_omega = .false.
       met_params%psv = 'surface_air_pressure'
       met_params%mslpv = 'air_pressure_at_sea_level'

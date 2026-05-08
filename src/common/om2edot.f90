@@ -188,9 +188,6 @@ subroutine edcomp(nx,ny,nz,u,v,edot,ps,xmd2h,ymd2h, &
         etadot = etadot*deta/dp
       !..and then mean with the input value
         edot(i,j,k) = (edot(i,j,k) + etadot)*0.5
-        ! if (i==412 .AND. j==505) then
-        !   write(*,*) etadot, edot(i,j,k), dp, div, k
-        ! endif
       end do
     end do
 

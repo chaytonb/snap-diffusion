@@ -48,7 +48,6 @@ module rwalkML
   character(len=64), save, public :: diffusion_scheme = ''
   character(len=64), save, public :: bl_definition = ''
   character(len=64), save, public :: meteo_type = ''
-  character(len=64), save, public :: record_stats = ''
   character(len=64), save, public :: entrainment_scheme = ''
 
   public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres, interp_tke_to_hybrid_field
@@ -199,11 +198,12 @@ subroutine rwalk(blfullmix,part,pextra)
 ! vertical diffusion
   if (part%z <= part%tbl) then ! Above boundary layer
 
-      if ((part%z + vrdbla*rnd(3)).gt.part%tbl) then ! reflect off BL top
-        part%z = 2 * part%tbl - (part%z + vrdbla*rnd(3))
-      else
-        part%z = part%z + vrdbla*rnd(3)
-      endif
+      ! if ((part%z + vrdbla*rnd(3)).gt.part%tbl) then ! reflect off BL top
+      !   part%z = 2 * part%tbl - (part%z + vrdbla*rnd(3))
+      ! else
+      !   part%z = part%z + vrdbla*rnd(3)
+      ! endif
+    part%z = part%z + vrdbla*rnd(3)
 
   else ! In boundary layer
     bl_entrainment_thickness = (1.0 - part%tbl)*(1.+entrainment)
@@ -567,7 +567,6 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   part%turbvelw=part%turbvelw*(1-(dttlw)) + (2*sigw**2 * dttlw)**0.5*rands(nrand) & 
                 + (part%ptstep/sigw) * dsigwdz * (sigw**2 + part%turbvelw**2)
   nrand=nrand+1
-
   
   ! Calculate new vertical position
   delz=part%turbvelw*part%ptstep 
@@ -864,13 +863,13 @@ subroutine constant_k_name_above_bl(part, pextra)
   mixing_top = part%hbl + delta_ext
 
   if (z1 <= mixing_top) then
-    ! End-point crosses into BL: instant-mix within BL
+    ! End-point crosses into BL, then instant-mix within BL
     call random_number(rnd)
     part%zmetres = rnd(1) * mixing_top
     return
   end if
 
-  ! No crossing; accept the FT step
+  ! No crossing, then accept the FT step
   part%zmetres = z1
 
 end subroutine constant_k_name_above_bl
@@ -1122,6 +1121,7 @@ subroutine diffusion_fields
   real, parameter :: r=287, g=9.81, k=0.4, cpa=1004.6
 
   real :: rho_a(nx, ny)
+  real :: fhsfc(nx, ny) ! Surface kinematic heat flux 
 
   ! Calculate surface air density
   rho_a = (ps2*100) / (t2m * r)
@@ -1129,20 +1129,23 @@ subroutine diffusion_fields
   ! Calculate friction velocity
   u_star_io = sqrt(surface_stress/(rho_a))
 
-  ! Calculate the obukhov length. Negative sign removed as ECMWF convention is positive for downward flux
-  obukhov_l_io = rho_a * cpa * t2m * (u_star_io**3)/(k*g*hflux)
-
-  ! Calculate the convective velocity scale, p.622/118 stull
   ! surface kinematic heat flux = H0/(rho*cpa)
+  fhsfc = hflux/(rho_a*cpa)
+
+  ! Calculate the obukhov length
+  obukhov_l_io = - (tv(:,:,2) * u_star_io**3)/(k*g*fhsfc)
+
   if (bl_definition == 'constant') then
     hbl2=600
   endif
-  w_star_io = ((g*hbl2*-hflux)/(tv(:,:,2)*rho_a*cpa))**0.333
+
+  ! Calculate the convective velocity scale
+  w_star_io = ((g/tv(:,:,2))*hbl2*fhsfc)**0.333
 
   where (ieee_is_nan(w_star_io))
     w_star_io = 0.0
   end where
-
+  
 end subroutine diffusion_fields
 
 subroutine air_density
@@ -1232,8 +1235,8 @@ subroutine interp_rho(part, pextra)
   real, parameter :: tiny_denom = 1.0e-12
 
   ! Grid indices and particle eta
-  i   = part%x
-  j   = part%y
+  i = part%x
+  j = part%y
   eta = part%z
 
   ! 1) Find bracketing layer in eta

@@ -210,9 +210,6 @@ contains
       v_io = 0.0
       end where
 
-      !.. Read in specific humidity data
-      call fi_checkload(fio, met_params%spec_humid, mass_fraction_units, spec_humid(:, :, k), nt=timepos, nz=ilevel, nr=nr)
-
       !..pot.temp. or abs.temp.
       call fi_checkload(fio, met_params%pottempv, temp_units, t_io(:, :, k), nt=timepos, nz=ilevel, nr=nr)
 
@@ -286,7 +283,7 @@ contains
       endif
     end if
 
-    if (nctype == 'era5') then
+    if (bl_definition == 'get_bl_from_meteo') then
   !..model boundary layer height
       call fi_checkload(fio, met_params%blh, surface_roughness_length_units, hbl_io(:, :), nt=timepos, nr=nr)
     endif
@@ -294,42 +291,55 @@ contains
 !.. Read in 2m air temperature
     call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
-!.. Read in surface stress varaibles
-    if (met_params%surface_stress /= "") then
-      ! Load surface_stress
-      call fi_checkload(fio, met_params%surface_stress, downward_momentum_flux_units, surface_stress(:, :), nt=timepos, nr=nr)
-    else if (met_params%xflux == "" .OR. met_params%yflux == "") then
-      ! Either surface_stress or xflux and yflux needs to be defined
-      error stop "Assertion error: Either surface_stress or xflux and yflux needs to be defined in the meteorological parameters"
-    else
-      allocate(xflux, yflux, MOLD=ps_io)
-      ! Load and combine surface stress/momentum flux components
-      if (met_params%xflux_is_accumulated) then
-        ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
-        call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%xflux, downward_momentum_flux_units, &
-          xflux(:, :), nr=nr)
+
+    ! Only read in extra fields if turbulence scheme requires it
+    if (diffusion_scheme == 'variable_k' .OR. diffusion_scheme == 'random_walk_flexpart'  &
+          .OR. diffusion_scheme == 'random_walk_name' .OR. diffusion_scheme == 'TKE') then
+      
+      ! Hflux
+      if (met_params%hflux_is_accumulated) then
+        call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%hflux, accum_surface_heat_flux_units, &
+          hflux(:, :), nr=nr)
       else
-        call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, &
-          nr=nr)
+        call fi_checkload(fio, met_params%hflux, '', hflux(:, :), nt=timepos, nr=nr)
+      endif
+      hflux(:,:) = -hflux ! Follow conventions for up/down
+
+  !.. Read in surface stress varaibles
+      if (met_params%surface_stress /= "") then
+        ! Load surface_stress
+        call fi_checkload(fio, met_params%surface_stress, downward_momentum_flux_units, surface_stress(:, :), nt=timepos, nr=nr)
+      else if (met_params%xflux == "" .OR. met_params%yflux == "") then
+        ! Either surface_stress or xflux and yflux needs to be defined
+        error stop "Assertion error: Either surface_stress or xflux and yflux needs to be defined in the meteorological parameters"
+      else
+        allocate(xflux, yflux, MOLD=ps_io)
+        ! Load and combine surface stress/momentum flux components
+        if (met_params%xflux_is_accumulated) then
+          ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
+          call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%xflux, downward_momentum_flux_units, &
+            xflux(:, :), nr=nr)
+        else
+          call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, &
+            nr=nr)
+        endif
+
+        if (met_params%yflux_is_accumulated) then
+          ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
+          call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%yflux, downward_momentum_flux_units, &
+            yflux(:, :), nr=nr)
+        else
+          call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr)
+        endif
+
+        surface_stress = hypot(yflux, xflux)
       endif
 
-      if (met_params%yflux_is_accumulated) then
-        ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
-        call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%yflux, downward_momentum_flux_units, &
-          yflux(:, :), nr=nr)
-      else
-        call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr)
-      endif
-
-      surface_stress = hypot(yflux, xflux)
     endif
 
-    ! Read in hflux
-    if (met_params%hflux_is_accumulated) then
-      call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%hflux, accum_surface_heat_flux_units, &
-        hflux(:, :), nr=nr)
-    else
-      call fi_checkload(fio, met_params%hflux, '', hflux(:, :), nt=timepos, nr=nr)
+    !.. Read in specific humidity data for calculation of air density (FLEXPART scheme)
+    if (diffusion_scheme=='TKE' .OR. diffusion_scheme=='random_walk_flexpart') then
+      call fi_checkload(fio, met_params%spec_humid, mass_fraction_units, spec_humid(:, :, k), nt=timepos, nz=ilevel, nr=nr)
     endif
 
     ! Read in TKE
@@ -1140,7 +1150,7 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
   use snapdimML, only: nx, ny, nk
   use snapgrdML, only: alevel, blevel
 
-  real, intent(in) :: hbl(:, :)
+  real, intent(inout) :: hbl(:, :)
   real, intent(out) :: vbl(:, :)
   
   real, parameter :: r=287, g=9.81
@@ -1155,6 +1165,9 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
   real :: weight
   real :: bl_top_pressure
   real :: pressure_below, pressure_above
+
+  where (hbl < 50.0) hbl = 50.0
+  where (hbl > 2000.0) hbl = 2000.0
 
   ! Find the height level corresponding to the one immediately above the boundary layer height
   above_index = nk
@@ -1183,10 +1196,6 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
       bl_top_pressure = pressure_below + weight * (pressure_above - pressure_below)
 
       vbl(i, j) = bl_top_pressure / ps2(i, j)
-
-      ! Enforce minimum and maximum limits on vbl
-      if (vbl(i, j) < 50.0) vbl(i, j) = 50.0
-      if (vbl(i, j) > 2000.0) vbl(i, j) = 2000.0
 
     end do
   end do
