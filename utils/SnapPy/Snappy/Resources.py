@@ -452,8 +452,15 @@ GRAVITY.FIXED.M/S=0.0002
                 self.directory, "landfractions", "largestLandFraction_EC0p1Global.nc"
             )
         elif metmodel == MetModel.EC0p1Europe:
-            # no setup needed, autdetection in snap
-            pass
+            # uses the same as global, with interpolation
+            if "FIMEX.INTERPOLATION" not in interpolation.upper():
+                # must have interpolation, use default EC0p1Europe unless given otherwise
+                latN, lonW, latS, lonE = 85, -20, 30, 50
+                gridRes = 0.1
+                interpolation += f"\nFIMEX.INTERPOLATION=nearest|+proj=latlon +R=6371000 +no_defs|{lonW},{lonW + gridRes},...,{lonE}|{latS},{latS + gridRes},...,{latN}|degree\n"
+            largest_landfraction_file = os.path.join(
+                self.directory, "landfractions", "largestLandFraction_EC0p1Global.nc"
+            )
         elif metmodel == MetModel.Meps2p5:
             largest_landfraction_file = os.path.join(
                 self.directory, "landfractions", "largestLandFraction_Meps2p5.nc"
@@ -466,7 +473,12 @@ GRAVITY.FIXED.M/S=0.0002
             # no setup needed, autdetection in snap
             pass
         elif metmodel == MetModel.Era5Nancy:
-            pass
+            # uses the same as global, with interpolation to nevada/nancy-files
+            if "FIMEX.INTERPOLATION" not in interpolation.upper():
+                interpolation += "\nFIMEX.INTERPOLATION=nearest|+proj=latlon +R=6371000 +no_defs|-135.,-134.75,...,-90|50,49.75,...,15|degree\n"
+            largest_landfraction_file = os.path.join(
+                self.directory, "landfractions", "largestLandFraction_EC0p1Global.nc"
+            )
         else:
             raise (
                 NotImplementedError("metmodel='{}' not implememented".format(metmodel))
