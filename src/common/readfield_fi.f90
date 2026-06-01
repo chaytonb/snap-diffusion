@@ -64,12 +64,14 @@ contains
                          sigmadot_units, temp_units, requires_precip_deaccumulation, &
                          downward_momentum_flux_units, surface_heat_flux_units, &
                          mass_fraction_units, acc_momentum_flux_units,surface_roughness_length_units, &
-                         accum_surface_heat_flux_units, surface_heat_flux_units
+                         accum_surface_heat_flux_units, surface_heat_flux_units, &
+                         accum_downward_momentum_flux_units
     USE snapdimML, only: nx, ny, nk, output_resolution_factor, hres_field, surface_index
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
-    USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme
+    USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme, interp_tke_to_hybrid_field
+    USE forwrdML, only: w_eta_to_m
     USE compheightML, only: compheight
 !> current timestep (always positive), negative istep means reset
     integer, intent(in) :: istep
@@ -213,6 +215,11 @@ contains
       !..pot.temp. or abs.temp.
       call fi_checkload(fio, met_params%pottempv, temp_units, t_io(:, :, k), nt=timepos, nz=ilevel, nr=nr)
 
+      !.. Read in specific humidity data for calculation of air density (FLEXPART scheme)
+      if (diffusion_scheme=='TKE' .OR. diffusion_scheme=='random_walk_flexpart') then
+        call fi_checkload(fio, met_params%spec_humid, mass_fraction_units, spec_humid(:, :, k), nt=timepos, nz=ilevel, nr=nr)
+      endif
+
       !   TODO read ptop from file (only needed for sigma), but not in emep data
       ptop = 100. ! hPa
       !       if(ivcoor.eq.2) ptop=idata(19)
@@ -317,7 +324,7 @@ contains
         ! Load and combine surface stress/momentum flux components
         if (met_params%xflux_is_accumulated) then
           ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
-          call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%xflux, downward_momentum_flux_units, &
+          call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%xflux, accum_downward_momentum_flux_units, &
             xflux(:, :), nr=nr)
         else
           call fi_checkload(fio, met_params%xflux, downward_momentum_flux_units, xflux(:, :), nt=timepos, &
@@ -326,7 +333,7 @@ contains
 
         if (met_params%yflux_is_accumulated) then
           ! Note: Arome files have the wrong units for downward_momentum_flux_units, missing a unit of time
-          call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%yflux, downward_momentum_flux_units, &
+          call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%yflux, accum_downward_momentum_flux_units, &
             yflux(:, :), nr=nr)
         else
           call fi_checkload(fio, met_params%yflux, downward_momentum_flux_units, yflux(:, :), nt=timepos, nr=nr)
@@ -335,11 +342,6 @@ contains
         surface_stress = hypot(yflux, xflux)
       endif
 
-    endif
-
-    !.. Read in specific humidity data for calculation of air density (FLEXPART scheme)
-    if (diffusion_scheme=='TKE' .OR. diffusion_scheme=='random_walk_flexpart') then
-      call fi_checkload(fio, met_params%spec_humid, mass_fraction_units, spec_humid(:, :, k), nt=timepos, nz=ilevel, nr=nr)
     endif
 
     ! Read in TKE
@@ -417,6 +419,10 @@ contains
       call convert_hbl_to_vbl(hbl_io, bl_io)
     endif
 
+    if (diffusion_scheme == 'TKE') then
+        call interp_tke_to_hybrid_field
+    endif
+
     if (met_params%sigmadot_is_omega) then
       !..omega -> etadot, or rather etadot derived from continuity-equation (mean of both)
       call om2edot
@@ -441,6 +447,8 @@ contains
       v_io = -v_io
       w_io = -w_io
     end if
+
+    call w_eta_to_m
 
 ! test---------------------------------------------------------------
     write (iulog, *) 'k,k_model,alevel,blevel,vlevel,p,dp:'

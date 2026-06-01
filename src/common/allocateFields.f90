@@ -22,8 +22,9 @@ module allocateFieldsML
       ustar, raero, my, nu, &
       total_activity_released, total_activity_lost_domain, total_activity_lost_other, tke_hyb, &
       cloud_cover, use_async_io, &
-      precip3d_x, precip3d_io, cloud_cover_io, cloud_cover_x, cw3d_x, cw3d_io, spec_humid, obukhov_l1, obukhov_l2, obukhov_l_io,  & 
-      u_star1, u_star2, u_star_io, w_star1, w_star2, w_star_io, rho, rhograd, pressures, rel_humid, tv, tke
+      precip3d_x, precip3d_io, cloud_cover_io, cloud_cover_x, cw3d_x, cw3d_io, spec_humid, obukhov_l1, obukhov_l2, obukhov_l3, &   
+      obukhov_l_io, u_star1, u_star2, u_star3, u_star_io, w_star1, w_star2, w_star3, w_star_io, pressures, rel_humid, & 
+      tv, tke, rho_io, rho1, rho2, rho3, rhograd_io, rhograd1, rhograd2, rhograd3, w_z1, w_z2, w_z3, w_z_io
   USE snapfilML, only: idata, fdata
   USE snapgrdML, only: ahalf, bhalf, vhalf, alevel, blevel, vlevel, imodlevel, &
       compute_column_max_conc, compute_aircraft_doserate, aircraft_doserate_threshold
@@ -133,9 +134,17 @@ subroutine allocateFields
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( obukhov_l2(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( rho(nx,ny,nk), STAT = AllocateStatus)
+  ALLOCATE ( rho1(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( rhograd(nx,ny,nk), STAT = AllocateStatus)
+  ALLOCATE ( rho2(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( rhograd1(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( rhograd2(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( w_z1(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( w_z2(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( pressures(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
@@ -171,6 +180,24 @@ subroutine allocateFields
     ALLOCATE ( hlayer3(nxhr,nyhr,nk), STAT = AllocateStatus)
     IF (AllocateStatus /= 0) ERROR STOP errmsg
     hlayer_io => hlayer3
+    ALLOCATE ( u_star3(nx, ny), STAT = AllocateStatus)
+    IF (AllocateStatus /= 0) ERROR STOP errmsg
+    u_star_io => u_star3
+    ALLOCATE ( obukhov_l3(nx, ny), STAT = AllocateStatus)
+    IF (AllocateStatus /= 0) ERROR STOP errmsg
+    obukhov_l_io => obukhov_l3
+    ALLOCATE ( w_star3(nx, ny), STAT = AllocateStatus)
+    IF (AllocateStatus /= 0) ERROR STOP errmsg
+    w_star_io => w_star3
+    ALLOCATE ( rho3(nx, ny, nk), STAT = AllocateStatus)
+    IF (AllocateStatus /= 0) ERROR STOP errmsg
+    rho_io => rho3
+    ALLOCATE ( rhograd3(nx, ny, nk), STAT = AllocateStatus)
+    IF (AllocateStatus /= 0) ERROR STOP errmsg
+    rhograd_io => rhograd3
+    ALLOCATE ( w_z3(nx, ny, nk), STAT = AllocateStatus)
+    IF (AllocateStatus /= 0) ERROR STOP errmsg
+    w_z_io => w_z3
   ELSE
     u_io => u2
     v_io => v2
@@ -184,6 +211,9 @@ subroutine allocateFields
     u_star_io => u_star2
     obukhov_l_io => obukhov_l2
     w_star_io => w_star2
+    rho_io => rho2
+    rhograd_io => rhograd2
+    w_z_io => w_z2
   END IF
 
   ALLOCATE ( idata(ldata), STAT = AllocateStatus)
@@ -392,6 +422,7 @@ subroutine deAllocateFields
   DEALLOCATE ( obukhov_l1)
   DEALLOCATE ( u_star1)
   DEALLOCATE ( w_star1)
+  DEALLOCATE ( w_z1)
 
 
   DEALLOCATE ( u2)
@@ -406,6 +437,7 @@ subroutine deAllocateFields
   DEALLOCATE ( obukhov_l2)
   DEALLOCATE ( u_star2)
   DEALLOCATE ( w_star2)
+  DEALLOCATE ( w_z2)
 
   if (allocated(u3)) then
     DEALLOCATE ( u3)
@@ -417,6 +449,7 @@ subroutine deAllocateFields
     DEALLOCATE ( hbl3)
     DEALLOCATE ( hlevel3)
     DEALLOCATE ( hlayer3)
+    DEALLOCATE ( w_z3)
   end if
 
 

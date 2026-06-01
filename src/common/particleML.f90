@@ -30,10 +30,12 @@ module particleML
         real(real64)   :: turbvelv
         !> turbulent w velocity
         real(real64)   :: turbvelw
+        !> vertical gradient of sigw
+        real(real64)   :: dsigwdz
         !> Lagrangian timescale
         real         :: tlw = 50
         !> Particle timestep
-        real         :: ptstep
+        real         :: ptstep = 5
         !> height of particle in metres
         real         :: zmetres
         !> forbidden state flag
@@ -60,6 +62,8 @@ module particleML
         real         :: u = 0.
         !> v-speed
         real         :: v = 0.
+        !> w-speed
+        real         :: w = 0.
         !> map ratio in x direction
         real(real64) :: rmx
         !> map ration in y direction

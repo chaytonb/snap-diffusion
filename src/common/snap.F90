@@ -189,7 +189,7 @@ PROGRAM bsnap
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
   USE rwalkML, only: rwalk_init, diffusion_scheme, bl_definition, &
-                     turbulence_master, eta_to_metres, well_mixed_test
+                     turbulence_master, eta_to_metres, well_mixed_test, metres_to_eta
   USE milibML, only: xyconvert, GEO_PARAMS
   USE forwrdML, only: forwrd
   USE wetdepML, only: wetdep, wetdep_scheme, wetdep_scheme_t, &
@@ -203,7 +203,7 @@ PROGRAM bsnap
           largest_landfraction_file,  drydep_unload => unload
   USE gaussian_smoothingML, only: build_age_gaussian_kernel, initialize_gaussian_smoothing
   USE decayML, only: decay, decayDeps
-  USE posintML, only: posint
+  USE posintML, only: posint, posint_newlevel, posint_vert
   USE releaseML, only: release, releases, tpos_bomb, nrelheight, mprel, &
                        mplume, nplume, iplume, npart, mpart, release_t
   USE init_random_seedML, only: init_random_seed, generate_normal_randoms
@@ -267,7 +267,7 @@ PROGRAM bsnap
   !> fractions to next timestep
   real :: rt2
 
-  real ::    x(1), y(1)
+  real :: x(1), y(1)
   real :: j
   type(extraParticle) :: pextra
   real ::    rscale
@@ -282,6 +282,11 @@ PROGRAM bsnap
   real :: p1, p2, px
   real :: frac
   real :: dt_min = 1 ! minimum timestep size for adaptive timestepping
+  real :: ux, vx ! Accumumlated displacements in horizontal direction
+
+  logical, allocatable :: interpol_exists(:)
+  real, allocatable :: uprof(:), vprof(:), wprof(:), rhoprof(:), rhogradprof(:)
+  integer :: k0 
 
   real :: mhmin, mhmax  ! minimum and maximum of mixing height
 !> Information for reading from a releasefile
@@ -302,6 +307,9 @@ PROGRAM bsnap
 #else
   character(len=*), parameter :: VERSION_ = "UNVERSIONED"
 #endif
+
+  allocate(interpol_exists(nk), uprof(nk), vprof(nk), wprof(nk), rhoprof(nk), rhogradprof(nk))
+
 
 #if defined(FIMEX)
   call fimex_set_loglevel(FIMEX_LOGLEVEL_WARN)
@@ -841,35 +849,66 @@ PROGRAM bsnap
             pdata(np)%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
           endif
 
+          if (.not.well_mixed_test) then
+            call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra, adaptive_timesteps)
+          endif
+
+          ux = 0
+          vx = 0
 
           !..apply the random walk method (diffusion)
           ! diffusion is applied after deposition to mix
           ! before output (which computes surface concentrations)
 
+          interpol_exists = .false.
+
+          call eta_to_metres(pdata(np), pextra)
+
           if (adaptive_timesteps) then
-            if (pdata(np)%z.gt.pdata(np)%tbl .OR. diffusion_scheme == 'random_walk_name') then ! Inside BL: adaptive substepping
+            if (pdata(np)%zmetres.lt.pdata(np)%hbl .OR. diffusion_scheme == 'random_walk_name' &
+                .OR. diffusion_scheme == 'TKE') then ! Inside BL: adaptive substepping
               t_local = 0.0
               do while (t_local < tstep)
 
-                ! Interpolate
-                if (t_local /= 0) then
-                  rt1=(tf2-(tnow+t_local))/(tf2-tf1)
-                  rt2=((tnow+t_local)-tf1)/(tf2-tf1)
-                  call posint(pdata(np), rt1, rt2, pextra)
+                i = pdata(np)%x
+                j = pdata(np)%y
+                ! Ensure levels around current z are initialised
+                do k0 = 1, nk-1
+                  if (pdata(np)%zmetres <= hlevel2(i, j, k0+1)) exit
+                end do
+                k0 = max(1, min(k0, nk-1))
+
+                if (.not.interpol_exists(k0)) then
+                  call posint_newlevel(pdata(np), pextra, k0, uprof, vprof, wprof, rhoprof, rhogradprof, rt1, rt2)
+                  interpol_exists(k0) = .true.
                 endif
 
-                ! Enforce timesteps 1/10 of the vertical lagrangian timescale
-                pdata(np)%ptstep = pdata(np)%tlw * 0.1
+                if (.not.interpol_exists(k0+1)) then
+                  call posint_newlevel(pdata(np), pextra, k0+1, uprof, vprof, wprof, rhoprof, rhogradprof, rt1, rt2)
+                  interpol_exists(k0+1) = .true.
+                endif
+
+                ! Interpolate just in the vertical direction
+                ! u, v, w, rho and rhograd are updated here
+                call posint_vert(pdata(np), pextra, uprof, vprof, wprof, rhoprof, rhogradprof, k0)
+
+                ! Calculate turbulent parameters
+                call turbulence_master(blfullmix, pdata(np), pextra)
+                
+                ! Enforce time step constrains 
+                pdata(np)%ptstep = min(pdata(np)%tlw, pdata(np)%hbl / (2 * abs(pdata(np)%turbvelw)), 0.5/abs(pdata(np)%dsigwdz)) * 0.1
+
                 pdata(np)%ptstep = max(pdata(np)%ptstep, dt_min) ! enforce minimum size for steps
                 
                 ! Ensure it does not exceed the global timestep window
-                pdata(np)%ptstep = min(pdata(np)%ptstep, tstep - t_local)
+                pdata(np)%ptstep = min(pdata(np)%ptstep, (tstep - t_local))
 
-                if (.not.well_mixed_test) then
-                  call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
-                endif
+                ! Accumulate displacements in x and y
+                ux = ux + pdata(np)%ptstep * (pextra%u + pdata(np)%turbvelu)
+                vx = vx + pdata(np)%ptstep * (pextra%v + pdata(np)%turbvelv)
 
-                call turbulence_master(blfullmix, pdata(np), pextra)
+                ! Apply vertical advection
+                pdata(np)%zmetres = pdata(np)%zmetres + pextra%w * pdata(np)%ptstep
 
                 call check_in_domain(pdata(np), out_of_domain)
                 if (out_of_domain) then
@@ -880,9 +919,10 @@ PROGRAM bsnap
 
                 t_local = t_local + pdata(np)%ptstep
 
-                if (pdata(np)%z.lt.pdata(np)%tbl .AND. diffusion_scheme /= 'random_walk_name') then
+                if (pdata(np)%zmetres.gt.pdata(np)%hbl .AND. diffusion_scheme /= 'random_walk_name' &
+                  .AND. diffusion_scheme /= 'TKE') then
                   ! moved out of BL: break and finish tstep above BL
-                  ! Always use small timesteps for NAME
+                  ! Always use small timesteps for NAME and TKE
                   exit
                 endif
 
@@ -891,15 +931,8 @@ PROGRAM bsnap
               if (t_local < tstep) then ! If particle leaves BL, finish whole step
                 pdata(np)%ptstep = tstep - t_local
 
-                ! Interpolate
-                if (t_local /= 0) then
-                  rt1=(tf2-(tnow+t_local))/(tf2-tf1)
-                  rt2=((tnow+t_local)-tf1)/(tf2-tf1)
-                  call posint(pdata(np), rt1, rt2, pextra)
-                endif
-
                 if (.not.well_mixed_test) then
-                  call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra)
+                  call forwrd(tf1, tf2, tnow+t_local, pdata(np)%ptstep, pdata(np), pextra, adaptive_timesteps)
                 endif
 
                 call turbulence_master(blfullmix, pdata(np), pextra)
@@ -913,19 +946,36 @@ PROGRAM bsnap
                 
                 t_local = t_local + pdata(np)%ptstep
 
+                if (.not.well_mixed_test) then
+                  ux = ux + pdata(np)%ptstep * (pextra%u + pdata(np)%turbvelu)
+                  vx = vx + pdata(np)%ptstep * (pextra%v + pdata(np)%turbvelv)
+                endif
+
+                pdata(np)%zmetres = pdata(np)%zmetres + pextra%w * pdata(np)%ptstep
+
               endif
 
+              ! Apply horizontal displacements
+              pdata(np)%x = pdata(np)%x + ux*pextra%rmx
+              pdata(np)%y = pdata(np)%y + vx*pextra%rmy
+
             else ! Already above BL: do a single full step
-              pdata(np)%ptstep = tstep
 
               if (.not.well_mixed_test) then
-                call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
+                call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra, adaptive_timesteps)
               endif
               
               if (use_random_walk) then
                 call turbulence_master(blfullmix, pdata(np), pextra)
               endif
-              
+
+              ! Apply horizontal displacements
+              pdata(np)%x = pdata(np)%x + tstep * (pextra%u + pdata(np)%turbvelu) * pextra%rmx
+              pdata(np)%y = pdata(np)%y + tstep * (pextra%v + pdata(np)%turbvelv) * pextra%rmy
+
+              ! Apply vertical advection
+              pdata(np)%zmetres = pdata(np)%zmetres + pextra%w * tstep
+
               !.. check domain (%active) after moving particle
               call check_in_domain(pdata(np), out_of_domain)
               if (out_of_domain) then
@@ -939,7 +989,7 @@ PROGRAM bsnap
             pdata(np)%ptstep = tstep
 
             if (.not.well_mixed_test) then
-              call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra)
+              call forwrd(tf1, tf2, tnow, tstep, pdata(np), pextra, adaptive_timesteps)
             endif
 
             if (use_random_walk) then
@@ -954,6 +1004,8 @@ PROGRAM bsnap
                 total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
             endif
           endif
+
+          call metres_to_eta(pdata(np), pextra)
 
           if (pdata(np)%is_active()) then
             if (pdata(np)%hbl > mhmax) mhmax = pdata(np)%hbl

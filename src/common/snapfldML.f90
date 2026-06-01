@@ -85,17 +85,29 @@ module snapfldML
 !> heights of model layer inferfaces (metres)
   real(kind=real32), allocatable, save, public :: hinterf(:,:,:)
 
-!> density of air
-  real(kind=real32), allocatable, save, public :: rho(:,:,:)
-
-!> vertical gradients of air density
-  real(kind=real32), allocatable, save, public :: rhograd(:,:,:)
-
 !> pressure values
   real(kind=real32), allocatable, save, public :: pressures(:,:,:)
 
 !> virtual temperature
   real(kind=real32), allocatable, save, public :: tv(:,:,:)
+
+!> density of air 
+  real(kind=real32), allocatable, target, save, public :: rho1(:,:,:)
+  real(kind=real32), allocatable, target, save, public :: rho2(:,:,:)
+  real(kind=real32), allocatable, target, save, public :: rho3(:,:,:)
+  real(kind=real32), pointer , public :: rho_io(:,:,:)
+
+!> vertical gradients of air density 
+  real(kind=real32), allocatable, target, save, public :: rhograd1(:,:,:)
+  real(kind=real32), allocatable, target, save, public :: rhograd2(:,:,:)
+  real(kind=real32), allocatable, target, save, public :: rhograd3(:,:,:)
+  real(kind=real32), pointer , public :: rhograd_io(:,:,:)
+
+!> vertical velocity in m/s
+  real(kind=real32), allocatable, target, save, public :: w_z1(:,:,:)
+  real(kind=real32), allocatable, target, save, public :: w_z2(:,:,:)
+  real(kind=real32), allocatable, target, save, public :: w_z3(:,:,:)
+  real(kind=real32), pointer , public :: w_z_io(:,:,:)
 
 !> obukhov length in metres (time step 1)
   real(kind=real32), allocatable, target, save, public :: obukhov_l1(:,:)
@@ -370,6 +382,13 @@ module snapfldML
       call swap_2_fields_3d(vd_dep, vd_dep_x)
       vd_dep_io => vd_dep_x
 
+      call swap_3_fields_3d(rho1, rho2, rho3)
+      rho_io => rho3
+      call swap_3_fields_3d(rhograd1, rhograd2, rhograd3)
+      rhograd_io => rhograd3
+      call swap_3_fields_3d(w_z1, w_z2, w_z3)
+      w_z_io => w_z3
+
       call swap_3_fields_2d(ps1, ps2, ps3)
       ps_io => ps3
       call swap_3_fields_2d(pmsl1, pmsl2, pmsl3)
@@ -378,6 +397,14 @@ module snapfldML
       bl_io => bl3
       call swap_3_fields_2d(hbl1, hbl2, hbl3)
       hbl_io => hbl3
+
+      call swap_3_fields_2d(u_star1, u_star2, u_star3)
+      u_star_io => u_star3
+      call swap_3_fields_2d(obukhov_l1, obukhov_l2, obukhov_l3)
+      obukhov_l_io => obukhov_l3
+      call swap_3_fields_2d(w_star1, w_star2, w_star3)
+      w_star_io => w_star3
+
     end if
   end subroutine swap_fields_after_reading
 
@@ -397,6 +424,12 @@ module snapfldML
       hlevel_io => hlevel2
       call swap_2_fields_3d(hlayer1, hlayer2)
       hlayer_io => hlayer2
+      call swap_2_fields_3d(rho1, rho2)
+      rho_io => rho2
+      call swap_2_fields_3d(rhograd1, rhograd2)
+      rhograd_io => rhograd2
+      call swap_2_fields_3d(w_z1, w_z2)
+      w_z_io => w_z2
 
       ! no need to swap precip, wscav and vd_dep, they get just overwritten
 

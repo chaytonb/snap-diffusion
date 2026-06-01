@@ -7,7 +7,7 @@ module forwrdML
   implicit none
   private
 
-  public forwrd
+  public forwrd, w_eta_to_m
 
   contains
 
@@ -22,7 +22,7 @@ module forwrdML
 !>   - all wind components in non-staggered horizontal grid
 !>     and in the same levels
 !>   - lower model level is level 2
-subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra)
+subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra, adaptive_timesteps)
   USE iso_fortran_env, only: real64
   USE particleML, only: particle, extraParticle
   USE snapgrdML, only: vlevel
@@ -38,9 +38,11 @@ subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra)
   type(Particle), intent(inout) :: part
 !> extra information for the particle (u, v, rm{x,y})
   type(extraParticle), intent(inout) :: pextra
+!> if in adaptive timestepping mode, don't update particle positions yet
+  logical, intent(in) :: adaptive_timesteps
 
   real(real64) :: dx1, dy1, dz1
-  real u, v
+  real u, v, w_save
 #if defined(PETTERSEN)
   type(particle) :: nparticle
   real(real64) :: dx2, dy2, dz2
@@ -48,10 +50,11 @@ subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra)
 #endif
 
   call forwrd_dx(tf1,tf2,tnow,tstep,part, dx1, dy1, dz1, &
-      u, v)
+      u, v, w_save, adaptive_timesteps)
 !..store u,v for rwalk
   pextra%u = u
   pextra%v = v
+  pextra%w = w_save
 #if defined(PETTERSEN)
   nparticle = part
   nparticle%x = nparticle%x + dx1*pextra%rmx
@@ -77,10 +80,13 @@ subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra)
     part%z = part%z + .5*(dz1 + dz2)
   endif
 #else
-  part%x = part%x + dx1*pextra%rmx
-  part%y = part%y + dy1*pextra%rmy
 
-  part%z = part%z + dz1
+  if (.not.adaptive_timesteps) then
+    part%x = part%x + dx1*pextra%rmx
+    part%y = part%y + dy1*pextra%rmy
+    part%z = part%z + dz1
+  endif
+
 #endif
   part%z = min(part%z, dble(vlevel(1)))
 
@@ -106,12 +112,12 @@ end subroutine forwrd
 !>     and in the same levels
 !>   - lower model level is level 2
 subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
-    delx, dely, delz, u, v)
+    delx, dely, delz, u, v, w_save, adaptive_timesteps)
   USE iso_fortran_env, only: real64
   USE particleML, only: particle
   USE snapgrdML, only: vlevel, vhalf, alevel, ahalf, blevel, bhalf, &
       ivlayer, ivlevel
-  USE snapfldML, only: u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2
+  USE snapfldML, only: u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, w_z1, w_z2
   USE snaptabML, only: cp, g, r, surface_height_sigma, exner
   USE vgravtablesML, only: vgrav
   USE snapdimML, only: nk
@@ -125,6 +131,7 @@ subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
   real, intent(in) :: tnow
 !> timestep in seconds
   real, intent(in) :: tstep
+  logical, intent(in) :: adaptive_timesteps
 !> particle
   type(Particle), intent(inout) :: part
 
@@ -138,6 +145,8 @@ subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
   real, intent(out) :: u
 !> wind-speed in y
   real, intent(out) :: v
+!> wind-speed in w
+  real, intent(out) :: w_save
 
   integer :: i,j,m,ilvl,k1,k2,kt1,kt2
   real :: dt,rt1,rt2,dx,dy,c1,c2,c3,c4,vlvl
@@ -191,10 +200,18 @@ subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
       +dz2*(interp(v2(i,j,k2), v2(i+1,j,k2), v2(i,j+1,k2), v2(i+1,j+1,k2), c1, c2, c3, c4))
   v = vt1*rt1 + vt2*rt2
 !..w
-  wt1 = dz1*(interp(w1(i,j,k1), w1(i+1,j,k1), w1(i,j+1,k1), w1(i+1,j+1,k1), c1, c2, c3, c4)) &
-      +dz2*(interp(w1(i,j,k2), w1(i+1,j,k2), w1(i,j+1,k2), w1(i+1,j+1,k2), c1, c2, c3, c4))
-  wt2 = dz1*(interp(w2(i,j,k1), w2(i+1,j,k1), w2(i,j+1,k1), w2(i+1,j+1,k1), c1, c2, c3, c4)) &
-      +dz2*(interp(w2(i,j,k2), w2(i+1,j,k2), w2(i,j+1,k2), w2(i+1,j+1,k2), c1, c2, c3, c4))
+! Use m/s vertical velocity if required for diffusion scheme
+  if (adaptive_timesteps) then
+    wt1 = dz1*(interp(w_z1(i,j,k1), w_z1(i+1,j,k1), w_z1(i,j+1,k1), w_z1(i+1,j+1,k1), c1, c2, c3, c4)) &
+        +dz2*(interp(w_z1(i,j,k2), w_z1(i+1,j,k2), w_z1(i,j+1,k2), w_z1(i+1,j+1,k2), c1, c2, c3, c4))
+    wt2 = dz1*(interp(w_z2(i,j,k1), w_z2(i+1,j,k1), w_z2(i,j+1,k1), w_z2(i+1,j+1,k1), c1, c2, c3, c4)) &
+        +dz2*(interp(w_z2(i,j,k2), w_z2(i+1,j,k2), w_z2(i,j+1,k2), w_z2(i+1,j+1,k2), c1, c2, c3, c4))
+  else
+    wt1 = dz1*(interp(w1(i,j,k1), w1(i+1,j,k1), w1(i,j+1,k1), w1(i+1,j+1,k1), c1, c2, c3, c4)) &
+        +dz2*(interp(w1(i,j,k2), w1(i+1,j,k2), w1(i,j+1,k2), w1(i+1,j+1,k2), c1, c2, c3, c4))
+    wt2 = dz1*(interp(w2(i,j,k1), w2(i+1,j,k1), w2(i,j+1,k1), w2(i+1,j+1,k1), c1, c2, c3, c4)) &
+        +dz2*(interp(w2(i,j,k2), w2(i+1,j,k2), w2(i,j+1,k2), w2(i+1,j+1,k2), c1, c2, c3, c4))
+  endif      
   w = wt1*rt1 + wt2*rt2
 
   m = part%icomp
@@ -267,5 +284,47 @@ subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
 
   return
 end subroutine forwrd_dx
+
+subroutine w_eta_to_m
+  ! Convert vertical velocity from eta/s to m/s.
+
+  USE snapfldML, only: w_io, hlevel_io, w_z_io
+  use snapgrdML,  only: vlevel
+  USE snapdimML, only: nx, ny, nk
+
+  integer :: i, j, k
+  real :: dzdeta, num, den
+  real, parameter :: eps = 1.0e-12
+
+  do j = 1, ny
+    do i = 1, nx
+
+      ! Bottom level: forward difference in eta
+      num = hlevel_io(i,j,3) - hlevel_io(i,j,2)
+      den = (vlevel(3) - vlevel(2)) 
+      dzdeta = num / den
+      w_z_io(i,j,2) = w_io(i,j,2) * dzdeta
+
+      w_z_io(i,j,1) = w_z_io(i,j,2)
+
+      ! Interior levels: central difference in eta
+      do k = 3, nk-1
+        num  = hlevel_io(i,j,k+1) - hlevel_io(i,j,k-1)
+        den  = (vlevel(k+1) - vlevel(k-1)) 
+        dzdeta = num / den
+        w_z_io(i,j,k) = w_io(i,j,k) * dzdeta
+      end do
+
+      ! Top level: backward difference in eta
+      num = hlevel_io(i,j,nk) - hlevel_io(i,j,nk-1)
+      den = (vlevel(nk) - vlevel(nk-1))
+      dzdeta = num / den
+      w_z_io(i,j,nk) = w_io(i,j,nk) * dzdeta
+
+    end do
+  end do
+
+
+end subroutine w_eta_to_m
 
 end module forwrdML

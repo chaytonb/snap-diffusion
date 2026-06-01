@@ -50,7 +50,8 @@ module rwalkML
   character(len=64), save, public :: meteo_type = ''
   character(len=64), save, public :: entrainment_scheme = ''
 
-  public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres, interp_tke_to_hybrid_field
+  public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres, interp_tke_to_hybrid_field, &
+         metres_to_eta
 
   contains
 
@@ -92,16 +93,11 @@ subroutine turbulence_master(blfullmix,part,pextra)
   endif
 
   if (diffusion_scheme == 'random_walk_flexpart') then
-    ! Convert particle height from eta to metres
-    call eta_to_metres(part, pextra)
-
     ! Check if particle within abl
-    if (part%z.gt.part%tbl) then
+    if (part%zmetres.lt.part%hbl) then
       call flexpart_diffusion_within_abl(part,pextra)
-      call metres_to_eta(part, pextra)
     else
       call flexpart_diffusion_above_abl(part, pextra)
-      !call metres_to_eta(part, pextra)
     endif
   elseif (diffusion_scheme == 'variable_k') then
     ! Convert particle height from eta to metres
@@ -234,9 +230,9 @@ subroutine rwalk(blfullmix,part,pextra)
   end if
 end subroutine rwalk
 
-subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FLEXPART code, turbswitch FALSE
+subroutine flexpart_diffusion_within_abl(part, pextra) 
   USE particleML, only: extraParticle, Particle
-  use snapfldML, only: rho, rhograd, ps2, t2m, hbl2, surface_stress, hflux, tv
+  use snapfldML, only: ps2, t2m, hbl2, surface_stress, hflux, tv
   USE snapgrdML, only: ivlayer
   
   !> particle with information
@@ -249,7 +245,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
   real :: tlu, tlv, tlw ! Lagrangian timescales
   real :: ru, rv, rw ! Lagrangian timescales
   real :: delz ! Turbulent vertical displacement (m)
-  real :: dsigw2dz 
+  real :: dsigwdz,dsigw2dz
   real :: dttlw
   real :: rhoaux ! Density correction factor
   real :: s1, s2
@@ -258,6 +254,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
   real :: top_entrainment
   real :: wst ! convective scale velocity
   real :: ol ! obukhov length
+  real :: ust ! friction velocity
   real :: turb_delu, turb_delv ! turbulent displacements in u and v directions
 
   ! Dimensionless height 
@@ -273,86 +270,67 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
   part_vert_index = part%z*10000
   k = ivlayer(part_vert_index) ! Vertical layer of particle, want to use this instead of ivlevel
 
+  ust = pextra%ust
   wst = pextra%wst
   ol = pextra%ol
 
   if (well_mixed_test) then
     wst = 1.5
     ol = -100
-    pextra%ust = 0.5
+    ust = 0.5
   endif
 
   ! Case 1, Neutral Conditions
   if (part%hbl/ABS(ol).lt.1.) then
-    pextra%ust = max(1.e-4, pextra%ust)
+    ust = max(1.e-4, ust)
 
     ! Eq. 7.25 Hanna 1982: 
-    sigu = 2.0 * pextra%ust * EXP(-3.e-4*part%zmetres/pextra%ust)
+    sigu = 2.0 * ust * EXP(-3.e-4*part%zmetres/ust)
     sigu = MAX(sigu, 1.e-5)
 
     ! Eq. 7.26 Hanna 1982:
-    sigv = 1.3 * pextra%ust * EXP(-2.e-4*part%zmetres/pextra%ust)
+    sigv = 1.3 * ust * EXP(-2.e-4*part%zmetres/ust)
     sigv=max(sigv,1.e-5)
     sigw=sigv
 
     ! Vertical gradient of sigw
-    dsigw2dz=-6.76e-4*pextra%ust*exp(-4.e-4*part%zmetres/pextra%ust)
+    dsigwdz=-2.e-4*sigw
 
     ! Lagrangian timescales
-    tlu=0.5*part%zmetres/sigw/(1.+1.5e-3*part%zmetres/pextra%ust)
+    tlu=0.5*part%zmetres/sigw/(1.+1.5e-3*part%zmetres/ust)
     tlv=tlu
     tlw=tlu
 
   ! Case 2 , Unstable Conditions
   elseif (ol.lt.0.) then
-    ! Eq. 4.15 Caughey 1982
-    sigu=pextra%ust*(12.-0.5*part%hbl/ol)**0.33333
-    sigu=MAX(sigu,1.e-6)
-    sigv=sigu
 
-    ! Eq. 7.15 Hanna 1982
-    if (scaled_height.lt.0.03) then
-      sigw=0.96*wst*(3*scaled_height-ol/part%hbl)**0.33333
-      dsigw2dz=1.8432*wst*wst/part%hbl*(3*scaled_height-ol/part%hbl)**(-0.33333)
-    else if (scaled_height.lt.0.4) then
-      s1=0.96*(3*scaled_height-ol/part%hbl)**0.33333
-      s2=0.763*scaled_height**0.175
-      if (s1.lt.s2) then
-        sigw=wst*s1
-        dsigw2dz=1.8432*wst*wst/part%hbl*(3*scaled_height-ol/part%hbl)**(-0.33333)
-      else
-        sigw=wst*s2
-        dsigw2dz=0.203759*wst*wst/part%hbl*scaled_height**(-0.65)
-      endif
-    else if (scaled_height.lt.0.96) then
-      sigw=0.722*wst*(1-scaled_height)**0.207
-      dsigw2dz=-.215812*wst*wst/part%hbl*(1-scaled_height)**(-0.586)
-    else if (scaled_height.lt.1.00) then 
-      sigw=0.37*wst
-      dsigw2dz=0.
-    endif
-    sigw=max(sigw,1.e-6) 
+    sigu = ust * (12 - 0.5 * part%hbl/ol)**0.33333
+    sigv = sigu
 
-    ! Determine average Lagrangian time scale
-    ! Eq. 7.17 Hanna  1982
-    tlu=0.15*part%hbl/sigu
-    tlv=tlu
-    if (part%zmetres.lt.ABS(ol)) then
-      tlw=0.1*part%zmetres/(sigw*(0.55-0.38*ABS(part%zmetres/ol)))
+    sigw = (1.2 * wst**2 *(1-0.9*scaled_height)*(scaled_height)**0.6666 + (1.8 - 1.4*scaled_height)*ust**2)**0.5
+    dsigwdz = (0.8 * wst**2 * (scaled_height)**-0.3333 - 1.8 * (scaled_height)**0.6666 - 1.4 * ust**2) & 
+              / (2 * part%hbl * sigw)
+
+    ! Lagrangian timescales
+    tlu = 0.15 * part%hbl/sigu
+    tlv = tlu
+    if (part%zmetres.lt.abs(ol)) then
+      tlw=0.1*part%zmetres/(sigw*(0.55-0.38*abs(part%zmetres/ol)))
     else if (scaled_height.lt.0.1) then
       tlw=0.59*part%zmetres/sigw
     else
-      tlw=0.15*part%hbl/sigw*(1.-EXP(-5*scaled_height))
+      tlw=0.15*part%zmetres/sigw*(1.-exp(-5*scaled_height))
     endif
 
+    
   ! Case 3, Stable Conditions 
   else
-    sigu=2.*pextra%ust*(1.-scaled_height) !. 7.20, Hanna
-    sigv=1.3*pextra%ust*(1.-scaled_height) !. 7.19, Hanna
+    sigu=2.*ust*(1.-scaled_height) !. 7.20, Hanna
+    sigv=1.3*ust*(1.-scaled_height) !. 7.19, Hanna
     sigu=max(sigu,1.e-6)
     sigv=max(sigv,1.e-6)
     sigw=sigv !. 7.19, Hanna
-    dsigw2dz=3.38*pextra%ust*pextra%ust*(scaled_height-1.)/part%hbl
+    dsigwdz=-1.3*ust/part%hbl
 
     ! Lagrangian timescales
     tlu=0.15*part%hbl/sigu*(sqrt(scaled_height)) !. 7.22, Hanna
@@ -367,6 +345,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
   tlw=max(30.,tlw)
 
   part%tlw = tlw
+  part%dsigwdz = dsigwdz
 
   if (.not.well_mixed_test) then
     ! Calculate turbulent horizontal velocities
@@ -392,12 +371,10 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
     call align_turbvels(part, pextra, turb_delu, turb_delv)
 
     ! Calculate new horizontal positions
-    part%x = part%x + turb_delu*pextra%rmx
-    part%y = part%y + turb_delv*pextra%rmy
+    !part%x = part%x + turb_delu*pextra%rmx
+    !part%y = part%y + turb_delv*pextra%rmy
   endif
 
-  ! Vertical interpolation of rho and rhograd
-  call interp_rho(part, pextra)
   rhoaux=pextra%rhograd/pextra%rho
 
   ! ratio of time step to lagrangian timescale for autocorrelation
@@ -405,10 +382,16 @@ subroutine flexpart_diffusion_within_abl(part, pextra) ! Based on Hanna1 from FL
 
   if (nrand+1.gt.max_rands) nrand=1
   ! Calculate turbulent vertical velocity
-  rw=exp(-dttlw)
-  part%turbvelw=(rw*part%turbvelw+rands(nrand)*sqrt(1.-rw**2)*sigw &
-        +tlw*(1.-rw)*(dsigw2dz+rhoaux*sigw**2)) * part%icbt
-  delz=part%turbvelw*part%ptstep 
+  if (dttlw.lt..5) then ! Small adaptive time steps
+    part%turbvelw=((1.-dttlw)*part%turbvelw + part%ptstep*(dsigwdz+rhoaux*sigw)) * part%icbt &
+       + sqrt(2.*dttlw) * rands(nrand)
+    delz=part%turbvelw*sigw*part%ptstep
+  else ! larger time steps
+    rw=exp(-dttlw)
+    part%turbvelw=(rw*part%turbvelw* +tlw*(1.-rw)*(dsigwdz+rhoaux*sigw)) * part%icbt &
+         + sqrt(1.-rw**2) * rands(nrand)
+    delz=part%turbvelw*sigw*part%ptstep 
+  endif
   nrand=nrand+1
 
   ! Calculate new vertical position
@@ -452,11 +435,6 @@ subroutine flexpart_diffusion_above_abl(part, pextra)
   nrand=nrand+2
   part%turbvelw=0
 
-  if (.not.well_mixed_test) then
-    part%x = part%x + part%turbvelu * part%ptstep*pextra%rmx
-    part%y = part%y + part%turbvelv * part%ptstep*pextra%rmy
-  endif
-
 end subroutine flexpart_diffusion_above_abl
 
 subroutine name_random_walk_profile_within_bl(part, pextra) 
@@ -477,7 +455,6 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
   real :: eps, c
   real :: dttlu, dttlv, dttlw
   real :: dsigwdz
-
 
   ! Dimensionless height 
   if (turb_homogeneous) then ! Take middle BL value if homogeneous
@@ -527,15 +504,10 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
     tlv = tlu
     tlw = 2*sigw**2 / (c*eps)
 
-    dsigwdz = (1.0/(2.0 * sigw * part%hbl)) *(wst**2*(0.8*scaled_height**(-1.0/3.0) - 1.8*scaled_height**(2.0/3.0)) - 1.4*ust**2)
+    dsigwdz = (1.0/(2.0 * sigw * part%hbl)) *(wst**2*(0.8*scaled_height**(-0.3333) - 1.8*scaled_height**(0.6666)) - 1.4*ust**2)
   endif
 
   if (turb_homogeneous) dsigwdz=0
-
-  ! Clamp lagrangian timescales
-  tlu=min(300.,tlu)
-  tlv=min(300.,tlv)
-  tlw=min(100.,tlw)
 
   tlu=max(20.,tlu)
   tlv=max(20.,tlv)
@@ -804,8 +776,6 @@ subroutine constant_k_name_within_bl(part, pextra)
 
   mixing_top = part%hbl + delta_ext
 
-  call random_number(rnd)
-
   if (.not.well_mixed_test) then
     ! Calculate Turbulent Velocities, Ryall and Maryon 1998
     if (nrand+1.gt.max_rands) nrand=1
@@ -856,10 +826,6 @@ subroutine constant_k_name_above_bl(part, pextra)
   delz = part%turbvelw * dt
   z1 = z0 + delz
 
-  ! Compute free troposphere displacement length scale
-  sigma_ft = sqrt(2.0 * K_ft * tstep) 
-  delta_ext = alpha * sigma_ft
-
   mixing_top = part%hbl + delta_ext
 
   if (z1 <= mixing_top) then
@@ -876,10 +842,9 @@ end subroutine constant_k_name_above_bl
 
 subroutine tke_diffusion(part, pextra)
   USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: tke_hyb, rho, rhograd, t2, pressures, hlevel2
+  USE snapfldML, only: tke_hyb, t2, pressures, hlevel2
   USE snapgrdML, only: ivlayer
   USE snapdimML, only: nk
-  use, intrinsic :: ieee_arithmetic
 
   type(Particle), intent(inout)  :: part
   type(extraParticle), intent(inout) :: pextra
@@ -911,8 +876,6 @@ subroutine tke_diffusion(part, pextra)
 
   part%tlw = tlw
 
-  ! Interpolate air density and gradient to part vert position
-  call interp_rho(part, pextra)
   rhoaux = pextra%rhograd/pextra%rho
 
   dttlw = dt/tlw
@@ -953,7 +916,6 @@ subroutine vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, 
   USE snapfldML, only: hlevel2, hlayer2, hinterf, tke_hyb
   USE snapgrdML, only: ivlayer
   USE snapdimML, only: nk
-  use, intrinsic :: ieee_arithmetic
 
   ! Arguments:
   integer, intent(in) :: i, j
@@ -1046,7 +1008,7 @@ end subroutine vertical_reflection_step
 subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
 
   USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: tke_hyb, rho, rhograd, t2, pressures, hlevel2
+  USE snapfldML, only: tke_hyb, t2, pressures, hlevel2
   USE snapgrdML, only: ivlayer
   USE snapdimML, only: nk
 
@@ -1056,7 +1018,7 @@ subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
   integer :: kp, part_vert_index
   real :: tke_z, yl, yl_up, yl_down, sum, e1
   real :: ru, rv, rw
-  real :: delz, dt, rhoaux
+  real :: delz, dt
   real :: pttprof(nk), pttrefprof(nk)
   integer :: indz, indzp
   real :: r, cp, g
@@ -1114,7 +1076,7 @@ subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
 end subroutine calc_turb_params_tke
 
 subroutine diffusion_fields
-  use snapfldML, only: ps2, t2m, hbl2, surface_stress, hflux, tv, obukhov_l_io, u_star_io, w_star_io
+  use snapfldML, only: ps_io, t2m, hbl_io, surface_stress, hflux, tv, obukhov_l_io, u_star_io, w_star_io
   use snapdimML, only: nx, ny
   use, intrinsic :: ieee_arithmetic
 
@@ -1124,7 +1086,7 @@ subroutine diffusion_fields
   real :: fhsfc(nx, ny) ! Surface kinematic heat flux 
 
   ! Calculate surface air density
-  rho_a = (ps2*100) / (t2m * r)
+  rho_a = (ps_io*100) / (t2m * r)
 
   ! Calculate friction velocity
   u_star_io = sqrt(surface_stress/(rho_a))
@@ -1136,11 +1098,11 @@ subroutine diffusion_fields
   obukhov_l_io = - (tv(:,:,2) * u_star_io**3)/(k*g*fhsfc)
 
   if (bl_definition == 'constant') then
-    hbl2=600
+    hbl_io=600
   endif
 
   ! Calculate the convective velocity scale
-  w_star_io = ((g/tv(:,:,2))*hbl2*fhsfc)**0.333
+  w_star_io = ((g/tv(:,:,2))*hbl_io*fhsfc)**0.333
 
   where (ieee_is_nan(w_star_io))
     w_star_io = 0.0
@@ -1149,7 +1111,7 @@ subroutine diffusion_fields
 end subroutine diffusion_fields
 
 subroutine air_density
-  use snapfldML, only: spec_humid, ps2, hlevel2, t2, rho, rhograd, pressures, tv
+  use snapfldML, only: spec_humid, ps_io, hlevel_io, t2, rho_io, rhograd_io, pressures, tv
   use snapdimML, only: nx, ny, nk
   use snapgrdML, only: alevel, blevel, ivlayer
 
@@ -1171,9 +1133,9 @@ subroutine air_density
   do j = 1, ny
     do i = 1, nx
       do k = 1, nk
-        pressures(i,j,k) = alevel(k) * 100 + blevel(k) * ps2(i,j) * 100.0
+        pressures(i,j,k) = alevel(k) * 100 + blevel(k) * ps_io(i,j) * 100.0
       end do
-      pressures(i,j,2) = ps2(i,j) * 100.0
+      pressures(i,j,2) = ps_io(i,j) * 100.0
     end do
   end do
 
@@ -1181,10 +1143,10 @@ subroutine air_density
   do j = 1, ny
     do i = 1, nx
       do k = 2, nk
-        rho(i,j,k) = pressures(i,j,k) / (r * tv(i,j,k))
+        rho_io(i,j,k) = pressures(i,j,k) / (r * tv(i,j,k))
       end do
       ! Fill synthetic surface 
-      rho(i,j,1) = rho(i,j,2)
+      rho_io(i,j,1) = rho_io(i,j,2)
     end do
   end do
 
@@ -1192,8 +1154,8 @@ subroutine air_density
   do k = 3, nk-1
     do j = 1, ny
       do i = 1, nx
-        rhograd(i,j,k) = (rho(i,j,k+1) - rho(i,j,k-1)) / &
-                        (hlevel2(i,j,k+1) - hlevel2(i,j,k-1))
+        rhograd_io(i,j,k) = (rho_io(i,j,k+1) - rho_io(i,j,k-1)) / &
+                        (hlevel_io(i,j,k+1) - hlevel_io(i,j,k-1))
       end do
     end do
   end do
@@ -1201,98 +1163,99 @@ subroutine air_density
   ! Bottom boundary, forward difference
   do j = 1, ny
     do i = 1, nx
-      rhograd(i,j,2) = ( rho(i,j,3) - rho(i,j,2) ) &
-                       / ( hlevel2(i,j,3) - hlevel2(i,j,2) )
+      rhograd_io(i,j,2) = ( rho_io(i,j,3) - rho_io(i,j,2) ) &
+                       / ( hlevel_io(i,j,3) - rhograd_io(i,j,2) )
     end do
   end do
 
   ! Top boundary, backward difference
   do j = 1, ny
     do i = 1, nx
-      rhograd(i,j,nk) = ( rho(i,j,nk) - rho(i,j,nk-1) ) &
-                        / ( hlevel2(i,j,nk) - hlevel2(i,j,nk-1) )
+      rhograd_io(i,j,nk) = ( rho_io(i,j,nk) - rho_io(i,j,nk-1) ) &
+                        / ( hlevel_io(i,j,nk) - hlevel_io(i,j,nk-1) )
     end do
   end do
 
+
 end subroutine
 
-subroutine interp_rho(part, pextra)
-  use particleML, only: Particle, extraParticle
-  use snapfldML,  only: hlevel2, ps2, rho, rhograd
-  use snapgrdML,  only: vlevel, alevel, blevel
-  use snapdimML,  only: nk
-  implicit none
+! subroutine interp_rho(part, pextra)
+!   use particleML, only: Particle, extraParticle
+!   use snapfldML,  only: hlevel_io, ps_io, rho, rhograd
+!   use snapgrdML,  only: vlevel, alevel, blevel
+!   use snapdimML,  only: nk
+!   implicit none
 
-  type(Particle),      intent(inout) :: part
-  type(extraParticle), intent(inout) :: pextra
+!   type(Particle),      intent(inout) :: part
+!   type(extraParticle), intent(inout) :: pextra
 
-  integer :: i, j, k
-  real :: eta
-  real :: z1, z2
-  real :: p1, p2, px
-  real :: frac, w, denom
-  real :: y1, y2, m1, m2
-  real, parameter :: tiny_denom = 1.0e-12
+!   integer :: i, j, k
+!   real :: eta
+!   real :: z1, z2
+!   real :: p1, p2, px
+!   real :: frac, w, denom
+!   real :: y1, y2, m1, m2
+!   real, parameter :: tiny_denom = 1.0e-12
 
-  ! Grid indices and particle eta
-  i = part%x
-  j = part%y
-  eta = part%z
+!   ! Grid indices and particle eta
+!   i = part%x
+!   j = part%y
+!   eta = part%z
 
-  ! 1) Find bracketing layer in eta
-  do k = 1, nk-1
-    if (eta > vlevel(k+1)) exit
-  end do
-  k = max(1, min(k, nk-1))
+!   ! Find bracketing layer in eta
+!   do k = 1, nk-1
+!     if (eta > vlevel(k+1)) exit
+!   end do
+!   k = max(1, min(k, nk-1))
 
-  ! 2) Fraction in eta
-  frac = (eta - vlevel(k)) / (vlevel(k+1) - vlevel(k))
-  frac = max(0.0, min(1.0, frac))
+!   ! Fraction in eta
+!   frac = (eta - vlevel(k)) / (vlevel(k+1) - vlevel(k))
+!   frac = max(0.0, min(1.0, frac))
 
-  ! 3) Heights at bracketing levels
-  z1 = hlevel2(i,j,k)
-  z2 = hlevel2(i,j,k+1)
+!   ! Heights at bracketing levels
+!   z1 = hlevel_io(i,j,k)
+!   z2 = hlevel_io(i,j,k+1)
 
-  ! 4) Pressures at bracketing levels (Pa)
-  p1 = alevel(k)*100.0 + blevel(k) * ps2(i,j) * 100.0
-  p2 = alevel(k + 1)*100.0 + blevel(k + 1) * ps2(i,j) * 100.0
+!   ! Pressures at bracketing levels (Pa)
+!   p1 = alevel(k)*100.0 + blevel(k) * ps_io(i,j) * 100.0
+!   p2 = alevel(k + 1)*100.0 + blevel(k + 1) * ps_io(i,j) * 100.0
 
-  ! 5) Pressure at particle (linear in frac)
-  px = p1 * (1.0 - frac) + p2 * frac
+!   ! Pressure at particle (linear in frac)
+!   px = p1 * (1.0 - frac) + p2 * frac
 
-  ! 6) Particle geometric height using log-pressure interpolation 
-  if (p1 > 0.0 .and. p2 > 0.0) then
-    part%zmetres = z1 + (z2 - z1) / log(p2/p1) * log(px/p1)
-  else
-    part%zmetres = z1 * (1.0 - frac) + z2 * frac
-  end if
+!   ! Particle geometric height using log-pressure interpolation 
+!   if (p1 > 0.0 .and. p2 > 0.0) then
+!     part%zmetres = z1 + (z2 - z1) / log(p2/p1) * log(px/p1)
+!   else
+!     part%zmetres = z1 * (1.0 - frac) + z2 * frac
+!   end if
 
-  ! 7) Values at bracketing levels
-  y1 = rho(i,j,k)
-  y2 = rho(i,j,k+1)
-  m1 = rhograd(i,j,k)     ! assumed dρ/dz at level k
-  m2 = rhograd(i,j,k+1)   ! assumed dρ/dz at level k+1
+!   ! Values at bracketing levels
+!   y1 = rho(i,j,k)
+!   y2 = rho(i,j,k+1)
+!   m1 = rhograd(i,j,k) ! assumed dρ/dz at level k
+!   m2 = rhograd(i,j,k+1) ! assumed dρ/dz at level k+1
 
-  ! 8) Log-pressure interpolation weight
-  if (p1 > 0.0 .and. p2 > 0.0) then
-    denom = log(p2/p1)
-    if (abs(denom) > tiny_denom .and. px > 0.0) then
-      w = log(px/p1) / denom
-      w = max(0.0, min(1.0, w))
-    else
-      ! Fallback if pressures are nearly identical
-      w = frac
-    end if
-  else
-    ! Fallback if invalid pressures
-    w = frac
-  end if
+!   ! Log-pressure interpolation weight
+!   if (p1 > 0.0 .and. p2 > 0.0) then
+!     denom = log(p2/p1)
+!     if (abs(denom) > tiny_denom .and. px > 0.0) then
+!       w = log(px/p1) / denom
+!       w = max(0.0, min(1.0, w))
+!     else
+!       ! Fallback if pressures are nearly identical
+!       w = frac
+!     end if
+!   else
+!     ! Fallback if invalid pressures
+!     w = frac
+!   end if
 
-  ! 9) Interpolate rho and rhograd using log-pressure weight
-  pextra%rho = y1*(1.0 - w) + y2*w
-  pextra%rhograd = m1*(1.0 - w) + m2*w
+!   ! Interpolate rho and rhograd using log-pressure weight
+!   pextra%rho = y1*(1.0 - w) + y2*w
+!   pextra%rhograd = m1*(1.0 - w) + m2*w
 
-end subroutine interp_rho
+! end subroutine interp_rho
 
 subroutine align_turbvels(part, pextra, turb_delu, turb_delv)
   use particleML, only: extraParticle, Particle
@@ -1361,7 +1324,7 @@ subroutine eta_to_metres(part, pextra)
   p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
   p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
 
-  ! Pressure at particle (linear in frac)
+  ! Pressure at particle
   px = p1 * (1.0 - frac) + p2 * frac
 
   ! Log-pressure height interpolation
@@ -1379,6 +1342,7 @@ subroutine metres_to_eta(part, pextra)
   use snapfldML,  only: hlevel2, ps2
   use snapgrdML,  only: vlevel, alevel, blevel
   use snapdimML,  only: nk
+  use ieee_arithmetic, only : ieee_is_nan
 
   implicit none
 
@@ -1424,9 +1388,9 @@ subroutine interp_tke_profile_to_hybrid(p_tke, logp_tke, tke_prof, ntke, &
   implicit none
   integer, intent(in) :: ntke, nlev
   real(kind=8), intent(in)  :: p_tke(ntke), logp_tke(ntke)
-  real(kind=8), intent(in)  :: tke_prof(ntke)       ! TKE on fixed p-levels
-  real(kind=8), intent(in)  :: p_prof(nlev)         ! pressures at model levels
-  real(kind=8), intent(out) :: tke_hyb_prof(nlev)   ! TKE at model levels
+  real(kind=8), intent(in)  :: tke_prof(ntke) ! TKE on fixed p-levels
+  real(kind=8), intent(in)  :: p_prof(nlev) ! pressures at model levels
+  real(kind=8), intent(out) :: tke_hyb_prof(nlev) ! TKE at model levels
 
   integer :: k, k1, k2, klo, khi, kmid
   real(kind=8) :: logp_h, w
@@ -1445,8 +1409,6 @@ subroutine interp_tke_profile_to_hybrid(p_tke, logp_tke, tke_prof, ntke, &
         tke_hyb_prof(k) = tke_prof(ntke)
      else
         ! Find bracketing TKE levels in log-pressure space
-        ! klo = 1
-        ! khi = ntke
         do k1 = 1, ntke-1
           if (logp_tke(k1) <= logp_h .and. logp_tke(k1+1) >= logp_h) then
               k2 = k1 + 1
