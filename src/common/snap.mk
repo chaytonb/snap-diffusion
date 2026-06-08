@@ -11,7 +11,8 @@ filesort_nc.o fldout_nc.o \
 gaussian_smoothingML.o \
 init_random_seed.o\
 release.o releasefile.o rmpart.o split_particles.o allocateFields.o \
-find_parameters.o datetime.o
+find_parameters.o datetime.o \
+advance_particle.o
 
 # old milib files
 MODELOBJ += gridpar.o  mapfield.o  xyconvert.o \
@@ -101,11 +102,11 @@ find_parameters_fi.o: ../common/find_parameters_fi.f90 snapfimexML.o snapmetML.o
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
 fldout_nc.o: ../common/fldout_nc.f90 snapfilML.o snapgrdML.o snapfldML.o snapparML.o snaptabML.o snapdebugML.o snapdimML.o readfield_nc.o ftest.o release.o milibML.o datetime.o utils.o
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
-forwrd.o: ../common/forwrd.F90 particleML.o snapgrdML.o snapfldML.o snapparML.o snaptabML.o snapdimML.o snapdebugML.o vgravtables.o
+forwrd.o: ../common/forwrd.F90 particleML.o snapgrdML.o snapfldML.o snapparML.o snaptabML.o snapdimML.o snapdebugML.o vgravtables.o rwalk.o
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
 init_random_seed.o: ../common/init_random_seed.f90
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
-posint.o: ../common/posint.f90 snapgrdML.o snapdimML.o snapdebugML.o particleML.o snapfldML.o snapparML.o snapgrdML.o
+posint.o: ../common/posint.f90 snapgrdML.o snapdimML.o snapdebugML.o particleML.o snapfldML.o snapparML.o snapgrdML.o rwalk.o
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
 releasefile.o: ../common/releasefile.f90 snapparML.o snapdimML.o release.o
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
@@ -128,6 +129,9 @@ vgravtables.o: ../common/vgravtables.f90 snapparML.o snapdimML.o snapdebugML.o
 wetdep.o: ../common/wetdep.f90 particleML.o snapgrdML.o snapfldML.o snapparML.o snaptabML.o snapdimML.o snapdebugML.o
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
 datetime.o: ../common/datetime.f90
+	${F77} -c ${F77FLAGS} $(INCLUDES) $<
+
+advance_particle.o: ../common/advance_particle.f90 snapdimML.o snapfldML.o bldp.o forwrd.o particleML.o snapparML.o
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
 
 milibML.o: ../common/milibML.f90

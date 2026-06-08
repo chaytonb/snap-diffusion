@@ -136,6 +136,13 @@ module snapfldML
 !> deardorff velocity in meters io
   real(kind=real32), pointer , public :: w_star_io(:,:)
 
+!> gradient profiles for TKE scheme
+  real(kind=real32), allocatable, target, save, public :: dudxprof(:)
+  real(kind=real32), allocatable, target, save, public :: dvdyprof(:)
+  real(kind=real32), allocatable, target, save, public :: dwdzprof(:)
+  real(kind=real32), allocatable, target, save, public :: pttprof(:)
+  real(kind=real32), allocatable, target, save, public :: pttrefprof(:)
+
 !> hourly precipitation intensity (mm/hour)
   real(kind=real32), allocatable, target, save, public :: precip(:,:)
   real(kind=real32), allocatable, target, save, public :: precip_x(:,:)

@@ -24,7 +24,8 @@ module allocateFieldsML
       cloud_cover, use_async_io, &
       precip3d_x, precip3d_io, cloud_cover_io, cloud_cover_x, cw3d_x, cw3d_io, spec_humid, obukhov_l1, obukhov_l2, obukhov_l3, &   
       obukhov_l_io, u_star1, u_star2, u_star3, u_star_io, w_star1, w_star2, w_star3, w_star_io, pressures, rel_humid, & 
-      tv, tke, rho_io, rho1, rho2, rho3, rhograd_io, rhograd1, rhograd2, rhograd3, w_z1, w_z2, w_z3, w_z_io
+      tv, tke, rho_io, rho1, rho2, rho3, rhograd_io, rhograd1, rhograd2, rhograd3, w_z1, w_z2, w_z3, w_z_io, &
+      dudxprof, dvdyprof, dwdzprof, pttprof, pttrefprof
   USE snapfilML, only: idata, fdata
   USE snapgrdML, only: ahalf, bhalf, vhalf, alevel, blevel, vlevel, imodlevel, &
       compute_column_max_conc, compute_aircraft_doserate, aircraft_doserate_threshold
@@ -116,7 +117,7 @@ subroutine allocateFields
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( spec_humid(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( tke(nx,ny,15), STAT = AllocateStatus)
+  ALLOCATE ( tke(nx,ny,17), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( hinterf(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
@@ -149,6 +150,16 @@ subroutine allocateFields
   ALLOCATE ( pressures(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( tv(nx,ny,nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( dudxprof(nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( dvdyprof(nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( dwdzprof(nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( pttprof(nk), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( pttrefprof(nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
 
   IF (use_async_io) then

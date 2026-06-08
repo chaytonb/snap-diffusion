@@ -6,7 +6,7 @@ module bldpML
   implicit none
   private
 
-  public bldp
+  public bldp, set_constant_bl
 
   contains
 
@@ -293,4 +293,50 @@ subroutine bldp
 
   return
 end subroutine bldp
+
+subroutine set_constant_bl(part)
+
+  USE particleML, only: extraParticle, Particle
+  USE snapfldML, only: hlevel2, ps2
+  USE snapgrdML, only: alevel, blevel, vlevel
+  USE snapdimML, only: nk
+
+  type(Particle), intent(inout)  :: part
+
+  real :: z
+  real :: z1, z2
+  real :: p1, p2, px
+  real :: frac
+  integer :: i,j,k
+
+  ! find eta coordinate of 600metres at particle location
+  part%hbl = 600
+
+  i = part%x
+  j = part%y
+  z = part%hbl
+
+  do k = 2, nk-1
+    if (z < hlevel2(i,j,k+1)) exit
+  end do
+  k = max(1, min(k, nk-1))
+
+  z1 = hlevel2(i,j,k)
+  z2 = hlevel2(i,j,k+1)
+
+  p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
+  p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
+
+  if (p1 > 0.0 .and. p2 > 0.0) then
+    px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
+    frac = (px - p1) / (p2 - p1)
+  else
+    frac = (z - z1) / (z2 - z1)
+  end if
+  frac = max(0.0, min(1.0, frac))
+
+  part%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
+  
+end subroutine
+
 end module bldpML

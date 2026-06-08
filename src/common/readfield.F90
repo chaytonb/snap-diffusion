@@ -48,7 +48,8 @@ module readfieldML
     USE datetime, only: datetime_t
     USE snapdebug, only: iulog, idebug
     USE snapgrdML, only: gparam, igtype
-    USE rwalkML, only: bl_definition, diffusion_scheme, air_density, diffusion_fields
+    USE rwalkML, only: bl_definition, air_density, diffusion_fields, turbulence_fields_required, &
+                        diffusion_scheme
 
     USE iso_fortran_env, only: error_unit
 !> file type (netcdf or fimex)
@@ -81,16 +82,20 @@ module readfieldML
     !..compute model level heights
     call compheight
 
-    ! Compute required fields for turbulence parametrisations
-    if (diffusion_scheme == 'variable_k' .OR. diffusion_scheme == 'random_walk_flexpart'  &
-            .OR. diffusion_scheme == 'random_walk_name' .OR. diffusion_scheme == 'TKE') then
-        call air_density 
-        call diffusion_fields
-    endif
-
     !..calculate boundary layer (top and height)
     if (bl_definition /= 'get_bl_from_meteo' .and. bl_definition /= 'constant') then
         call bldp
+    endif
+
+    ! Compute required fields for turbulence parametrisations
+    if (turbulence_fields_required) then
+      call air_density 
+      call diffusion_fields
+    endif
+
+    ! Compute vertical gradient fields for TKE scheme
+    if (diffusion_scheme == 'TKE') then
+        
     endif
 
   end subroutine readfield_and_compute

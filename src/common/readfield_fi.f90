@@ -70,7 +70,8 @@ contains
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
-    USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme, interp_tke_to_hybrid_field
+    USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme, interp_tke_to_hybrid_field, &
+                       turbulence_fields_required, diffusion_in_metres
     USE forwrdML, only: w_eta_to_m
     USE compheightML, only: compheight
 !> current timestep (always positive), negative istep means reset
@@ -215,7 +216,7 @@ contains
       !..pot.temp. or abs.temp.
       call fi_checkload(fio, met_params%pottempv, temp_units, t_io(:, :, k), nt=timepos, nz=ilevel, nr=nr)
 
-      !.. Read in specific humidity data for calculation of air density (FLEXPART scheme)
+      !.. Read in specific humidity data for calculation of air density (for density correction term in langevin eq)
       if (diffusion_scheme=='TKE' .OR. diffusion_scheme=='random_walk_flexpart') then
         call fi_checkload(fio, met_params%spec_humid, mass_fraction_units, spec_humid(:, :, k), nt=timepos, nz=ilevel, nr=nr)
       endif
@@ -298,11 +299,8 @@ contains
 !.. Read in 2m air temperature
     call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
-
     ! Only read in extra fields if turbulence scheme requires it
-    if (diffusion_scheme == 'variable_k' .OR. diffusion_scheme == 'random_walk_flexpart'  &
-          .OR. diffusion_scheme == 'random_walk_name' .OR. diffusion_scheme == 'TKE') then
-      
+    if (turbulence_fields_required) then
       ! Hflux
       if (met_params%hflux_is_accumulated) then
         call read_accumulated_field(fio, nhdiff_precip, timepos, timeposm1, met_params%hflux, accum_surface_heat_flux_units, &
@@ -448,8 +446,8 @@ contains
       w_io = -w_io
     end if
 
-    call w_eta_to_m
-
+    if (diffusion_in_metres) call w_eta_to_m
+    
 ! test---------------------------------------------------------------
     write (iulog, *) 'k,k_model,alevel,blevel,vlevel,p,dp:'
     px = alevel(nk) + blevel(nk)*1000.

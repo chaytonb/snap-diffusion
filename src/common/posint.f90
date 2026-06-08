@@ -23,6 +23,7 @@ module posintML
 subroutine posint(part,rt1,rt2,pextra)
   USE particleML, only: Particle, extraParticle
   USE snapgrdML, only: gparam
+  USE rwalkML, only: turbulence_fields_required
   USE snapfldML, only: xm, ym, bl1, bl2, hbl1, hbl2, precip, &
     u_star1, u_star2, obukhov_l1, obukhov_l2, w_star1, w_star2
 
@@ -70,17 +71,25 @@ subroutine posint(part,rt1,rt2,pextra)
   hbl= rt1*interp(hbl1(i,j), hbl1(i+1,j), hbl1(i,j+1), hbl1(i+1,j+1), c1, c2, c3, c4) &
       +rt2*interp(hbl2(i,j), hbl2(i+1,j), hbl2(i,j+1), hbl2(i+1,j+1), c1, c2, c3, c4)
 
-  !..friction velocity
-  ust= rt1*interp(u_star1(i,j), u_star1(i+1,j), u_star1(i,j+1), u_star1(i+1,j+1), c1, c2, c3, c4) &
-    +rt2*interp(u_star2(i,j), u_star2(i+1,j), u_star2(i,j+1), u_star2(i+1,j+1), c1, c2, c3, c4)
 
-  !..obukhov length
-  ol= rt1*interp(obukhov_l1(i,j), obukhov_l1(i+1,j), obukhov_l1(i,j+1), obukhov_l1(i+1,j+1), c1, c2, c3, c4) &
-    +rt2*interp(obukhov_l2(i,j), obukhov_l2(i+1,j), obukhov_l2(i,j+1), obukhov_l2(i+1,j+1), c1, c2, c3, c4)
+  if (turbulence_fields_required) then
+    !..friction velocity
+    ust= rt1*interp(u_star1(i,j), u_star1(i+1,j), u_star1(i,j+1), u_star1(i+1,j+1), c1, c2, c3, c4) &
+      +rt2*interp(u_star2(i,j), u_star2(i+1,j), u_star2(i,j+1), u_star2(i+1,j+1), c1, c2, c3, c4)
 
-  !..convective scale velocity
-  wst= rt1*interp(w_star1(i,j), w_star1(i+1,j), w_star1(i,j+1), w_star1(i+1,j+1), c1, c2, c3, c4) &
-    +rt2*interp(w_star2(i,j), w_star2(i+1,j), w_star2(i,j+1), w_star2(i+1,j+1), c1, c2, c3, c4)
+    !..obukhov length
+    ol= rt1*interp(obukhov_l1(i,j), obukhov_l1(i+1,j), obukhov_l1(i,j+1), obukhov_l1(i+1,j+1), c1, c2, c3, c4) &
+      +rt2*interp(obukhov_l2(i,j), obukhov_l2(i+1,j), obukhov_l2(i,j+1), obukhov_l2(i+1,j+1), c1, c2, c3, c4)
+
+    !..convective scale velocity
+    wst= rt1*interp(w_star1(i,j), w_star1(i+1,j), w_star1(i,j+1), w_star1(i+1,j+1), c1, c2, c3, c4) &
+      +rt2*interp(w_star2(i,j), w_star2(i+1,j), w_star2(i,j+1), w_star2(i+1,j+1), c1, c2, c3, c4)
+
+    pextra%ol=ol
+    pextra%wst=wst
+    pextra%ust=ust
+
+  endif
 
   !..map ratio
   rmx= interp(xm(i,j), xm(i+1,j), xm(i,j+1), xm(i+1,j+1), c1, c2, c3, c4)
@@ -95,16 +104,13 @@ subroutine posint(part,rt1,rt2,pextra)
   pextra%rmx=rmx/dxgrid
   pextra%rmy=rmy/dygrid
   pextra%prc=pr
-  pextra%ol=ol
-  pextra%wst=wst
-  pextra%ust=ust
+
 
 end subroutine posint
 
 subroutine posint_vert(part, pextra, uprof, vprof, wprof, rhoprof, rhogradprof, k)
   
   USE particleML, only: Particle, extraParticle
-  USE snapdimML, only: nk
   USE snapfldML, only: hlevel2
 
   type(Particle), intent(in) :: part
