@@ -34,6 +34,7 @@ module rwalkML
   real(real64), parameter :: lmax = 0.28 ! Maximum l-eta in the mixing layer
   real(real64), parameter :: labove = 0.03 ! Standard l-eta above the mixing layer
   real(real64), parameter :: entrainment = 0.10 ! Entrainment zone = 10%*h
+  real, parameter :: dt_min = 1.0 ! minimum timestep size for adaptive timestepping
 
   ! Values for random number generation
   integer(int32), parameter :: max_rands=6000000
@@ -63,7 +64,6 @@ subroutine rwalk_init(timestep)
   use init_random_seedML, only: generate_normal_randoms
 !> time step in seconds (trajectory calculations)
   real, intent(in) :: timestep
-  integer :: i, unit
 
   tfactor_v = timestep/tmix_v
   tsqrtfactor_v=sqrt(tfactor_v)
@@ -77,12 +77,11 @@ subroutine rwalk_init(timestep)
   ! If diffusion scheme not default SNAP, then generate normally distributed random nums
   if (diffusion_scheme /= '') then
     call generate_normal_randoms(rands, max_rands)
-    diffusion_in_metres = .TRUE.
   endif
 
 end subroutine
 
-subroutine turbulence_master(part,pextra)
+subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
 
     !> particle with information
@@ -91,6 +90,10 @@ subroutine turbulence_master(part,pextra)
   type(extraParticle), intent(inout) :: pextra
   !> full mixing in boundarylayer (true=old,false=new)
 
+  ! Variables for determining adaptive time step size
+  real, intent(in) :: dt_remaining
+  logical, intent(in) :: adaptive
+
   if (bl_definition == 'constant') then
     part%hbl = 600
   endif
@@ -98,9 +101,9 @@ subroutine turbulence_master(part,pextra)
   if (diffusion_scheme == 'random_walk_flexpart') then
     ! Check if particle within abl
     if (part%zmetres.lt.part%hbl) then
-      call flexpart_diffusion_within_abl(part,pextra)
+      call flexpart_diffusion_within_abl(part,pextra, dt_remaining, adaptive)
     else
-      call flexpart_diffusion_above_abl(part, pextra)
+      call flexpart_diffusion_above_abl(part, pextra, dt_remaining)
     endif
   elseif (diffusion_scheme == 'variable_k') then
     ! Check if particle within abl
@@ -112,9 +115,9 @@ subroutine turbulence_master(part,pextra)
   elseif (diffusion_scheme == 'random_walk_name') then
     ! Check if particle within abl
     if (part%zmetres.lt.part%hbl) then
-      call name_random_walk_profile_within_bl(part, pextra)
+      call name_random_walk_profile_within_bl(part, pextra, dt_remaining, adaptive)
     else
-      call name_random_walk_profile_above_bl(part, pextra)
+      call name_random_walk_profile_above_bl(part, pextra, dt_remaining)
     endif
   elseif (diffusion_scheme == 'constant_k') then
     ! Check if particle within abl
@@ -124,7 +127,7 @@ subroutine turbulence_master(part,pextra)
       call constant_k_name_above_bl(part, pextra)
     endif
   elseif (diffusion_scheme == 'TKE') then
-    call tke_diffusion(part, pextra)
+    call tke_diffusion(part, pextra, dt_remaining, adaptive)
   else 
     call rwalk(blfullmix, part, pextra)
   endif
@@ -219,18 +222,18 @@ subroutine rwalk(blfullmix,part,pextra)
   end if
 end subroutine rwalk
 
-subroutine flexpart_diffusion_within_abl(part, pextra) 
+subroutine flexpart_diffusion_within_abl(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
   use snapfldML, only: hbl2
-  USE snapgrdML, only: ivlayer
-  use, intrinsic :: ieee_arithmetic
   
   !> particle with information
   type(Particle), intent(inout)  :: part
   !> extra information regarding the particle
   type(extraParticle), intent(inout) :: pextra
 
-  integer :: i, j, k
+  real, intent(in) :: dt_remaining
+  logical, intent(in) :: adaptive
+
   real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
   real :: tlu, tlv, tlw ! Lagrangian timescales
   real :: ru, rv, rw ! Turbulence correlation terms
@@ -238,9 +241,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra)
   real :: dsigwdz
   real :: dttlw
   real :: density_corr ! Density correction term
-  integer :: part_vert_index
   real :: scaled_height
-  real :: top_entrainment
   real :: wst ! convective scale velocity
   real :: ol ! obukhov length
   real :: ust ! friction velocity
@@ -251,12 +252,6 @@ subroutine flexpart_diffusion_within_abl(part, pextra)
   else
     scaled_height = part%zmetres/part%hbl
   endif
-
-  ! Get particle position
-  i = part%x
-  j = part%y
-  part_vert_index = part%z*10000
-  k = ivlayer(part_vert_index) ! Vertical layer of particle, want to use this instead of ivlevel
 
   ust = pextra%ust
   wst = pextra%wst
@@ -282,7 +277,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra)
     sigw=sigv
 
     ! Vertical gradient of sigw
-    dsigwdz=-2.e-4*sigw
+    dsigwdz=(-2.e-4*sigw)/ust
 
     ! Lagrangian timescales
     tlu=0.5*part%zmetres/sigw/(1.+1.5e-3*part%zmetres/ust)
@@ -332,6 +327,10 @@ subroutine flexpart_diffusion_within_abl(part, pextra)
 
   part%tlw = tlw
   part%dsigwdz = dsigwdz
+  part%sigw = sigw
+
+  ! Based on turbulence parameters, calculate size of integration time step
+  call set_turbulence_timestep(part, dt_remaining, adaptive)
 
   ! Calculate turbulent horizontal velocities
   if (nrand+1.gt.max_rands) nrand=1
@@ -390,7 +389,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra)
 
 end subroutine flexpart_diffusion_within_abl
 
-subroutine flexpart_diffusion_above_abl(part, pextra)
+subroutine flexpart_diffusion_above_abl(part, pextra, dt_remaining)
 
   USE particleML, only: extraParticle, Particle
 
@@ -399,10 +398,13 @@ subroutine flexpart_diffusion_above_abl(part, pextra)
   !> extra information regarding the particle 
   type(extraParticle), intent(inout) :: pextra
 
+  real, intent(in) :: dt_remaining
+
   ! turbulence factors for the troposphere
   real :: d_trop=50.
-  
   real :: uxscale
+
+  call set_turbulence_timestep(part, dt_remaining, .false.)
 
   ! assume within troposphere
   uxscale=sqrt(2.*d_trop/part%ptstep)
@@ -414,13 +416,16 @@ subroutine flexpart_diffusion_above_abl(part, pextra)
 
 end subroutine flexpart_diffusion_above_abl
 
-subroutine name_random_walk_profile_within_bl(part, pextra) 
+subroutine name_random_walk_profile_within_bl(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
   
   !> particle with information
   type(Particle), intent(inout)  :: part
   !> extra information regarding the particle
   type(extraParticle), intent(inout) :: pextra
+
+  real, intent(in) :: dt_remaining
+  logical, intent(in) :: adaptive
 
   real :: k ! Von Karmans constant
   real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
@@ -485,11 +490,17 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
 
   if (turb_homogeneous) dsigwdz=0
 
-  tlu=max(20.,tlu)
-  tlv=max(20.,tlv)
-  tlw=max(20.,tlw)
+  ! Clamp lagrangian timescales
+  tlu=max(10.,tlu)
+  tlv=max(10.,tlv)
+  tlw=max(30.,tlw)
 
   part%tlw = tlw
+  part%sigw = sigw
+  part%dsigwdz = dsigwdz
+
+  ! Based on turbulence parameters, calculate size of integration time step
+  call set_turbulence_timestep(part, dt_remaining, adaptive)
 
   dttlu = part%ptstep/tlu
   dttlv = part%ptstep/tlv
@@ -505,12 +516,12 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
 
   if (nrand+1.gt.max_rands) nrand=1
   ! Calculate turbulent vertical velocity
-  part%turbvelw=part%turbvelw*(1-(dttlw)) + (2*sigw**2 * dttlw)**0.5*rands(nrand) & 
-                + (part%ptstep/sigw) * dsigwdz * (sigw**2 + part%turbvelw**2)
+  part%turbvelw=(1.-dttlw)*part%turbvelw + part%ptstep*dsigwdz &
+                  + sqrt(2.*dttlw) * rands(nrand)
   nrand=nrand+1
-  
+
   ! Calculate new vertical position
-  delz=part%turbvelw*part%ptstep 
+  delz=part%turbvelw*sigw*part%ptstep 
 
   ! Reflection and position updates
   if (delz.lt.-part%zmetres) then         ! reflection at ground
@@ -525,7 +536,7 @@ subroutine name_random_walk_profile_within_bl(part, pextra)
 
 end subroutine name_random_walk_profile_within_bl
 
-subroutine name_random_walk_profile_above_bl(part, pextra) 
+subroutine name_random_walk_profile_above_bl(part, pextra, dt_remaining)
   USE particleML, only: extraParticle, Particle
   
   !> particle with information
@@ -533,10 +544,13 @@ subroutine name_random_walk_profile_above_bl(part, pextra)
   !> extra information regarding the particle
   type(extraParticle), intent(inout) :: pextra
 
+  real, intent(in) :: dt_remaining
+
   real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
   real :: tlu, tlv, tlw ! Lagrangian timescales
   real :: delz ! Turbulent vertical displacement (m)
   real :: dttlw, dttlu, dttlv
+  real :: ru, rv, rw ! Turbulence correlation terms
   
   sigu = 0.25
   sigv = 0.25
@@ -547,25 +561,38 @@ subroutine name_random_walk_profile_above_bl(part, pextra)
 
   part%tlw = tlw
 
+  call set_turbulence_timestep(part, dt_remaining, .FALSE.)
+
   dttlu = part%ptstep/tlu
   dttlv = part%ptstep/tlv
 
-  ! Calculate Turbulent Velocities, Ryall and Maryon 1998
+  ! Calculate turbulent horizontal velocities
   if (nrand+1.gt.max_rands) nrand=1
-  part%turbvelu = part%turbvelu*(1-(dttlu)) + (2*sigu**2 * dttlu)**0.5*rands(nrand)
-  part%turbvelv = part%turbvelv*(1-(dttlv)) + (2*sigv**2 * dttlv)**0.5*rands(nrand+1)
+  if (part%ptstep/tlu.lt..5) then
+    part%turbvelu=(1.-part%ptstep/tlu)*part%turbvelu+rands(nrand)*sigu*sqrt(2.*part%ptstep/tlu)
+  else
+    ru=exp(-part%ptstep/tlu)
+    part%turbvelu=ru*part%turbvelu+rands(nrand)*sigu*sqrt(1.-ru**2)
+  endif
+  if (part%ptstep/tlv.lt..5) then
+    part%turbvelv=(1.-part%ptstep/tlv)*part%turbvelv+rands(nrand+1)*sigv*sqrt(2.*part%ptstep/tlv)
+  else
+    rv=exp(-part%ptstep/tlv)
+    part%turbvelv=rv*part%turbvelv+rands(nrand+1)*sigv*sqrt(1.-rv**2)
+  endif
   nrand=nrand+2
 
   ! ratio of time step to lagrangian timescale for autocorrelation
   dttlw = part%ptstep/tlw
 
-  if (nrand+1.gt.max_rands) nrand=1
   ! Calculate turbulent vertical velocity
-  part%turbvelw=part%turbvelw*(1-(dttlw)) + (2*sigw**2 * dttlw)**0.5*rands(nrand)
+  if (nrand.gt.max_rands) nrand=1
+  rw = exp(-dttlw)
+  part%turbvelw = rw * part%turbvelw + + sqrt(1.0-rw**2) * rands(nrand)
   nrand=nrand+1
 
   ! Calculate new vertical position
-  delz=part%turbvelw*part%ptstep  
+  delz=part%turbvelw*sigw*part%ptstep  
 
   !Reflect at inversion (from above) so it is symmetric with BL routine
   if (part%zmetres+delz .lt. part%hbl) then
@@ -590,7 +617,6 @@ subroutine variable_k_name_within_bl(part, pextra)
   real :: tlu, tlv, tlw ! Lagrangian timescales
   real :: delz ! Turbulent vertical displacement (m)
   real :: scaled_height
-  real :: top_entrainment
   real :: wst, ust
   real :: eps, c
 
@@ -637,9 +663,9 @@ subroutine variable_k_name_within_bl(part, pextra)
   endif
 
   ! Clamp lagrangian timescales
-  tlu=max(300.,tlu)
-  tlv=max(300.,tlv)
-  tlw=max(100.,tlw)
+  tlu=max(20.,tlu)
+  tlv=max(20.,tlv)
+  tlw=max(20.,tlw)
 
   ! Calculate Turbulent Velocities, Ryall and Maryon 1998
   if (nrand+2.gt.max_rands) nrand=1
@@ -677,8 +703,6 @@ subroutine variable_k_name_above_bl(part, pextra)
   real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
   real :: tlu, tlv, tlw ! Lagrangian timescales
   real :: delz ! Turbulent vertical displacement (m)
-  real :: top_entrainment
-  real :: znew, ztop
 
   sigu = 0.25
   sigv = sigu
@@ -715,7 +739,7 @@ subroutine constant_k_name_within_bl(part, pextra)
 
   ! Locals
   real :: rnd(1)
-  real :: hbl, sigma_ft, delta_ext, mixing_top
+  real :: sigma_ft, delta_ext, mixing_top
 
   integer, parameter :: hor_diffu = 5300 ! m^2 s^-1 (BL horizontal diffusion)
   real, parameter :: K_ft = 1.5 ! m^2 s^-1 (FT vertical diffusion)
@@ -747,7 +771,7 @@ subroutine constant_k_name_above_bl(part, pextra)
   real, parameter :: hor_diffu_ft = 5300.0/4.0 ! m^2 s^-1
   real, parameter :: K_ft = 1.5 ! m^2 s^-1
   real, parameter :: alpha = 1.7 ! entrainment zone extension factor
-  real :: dt, delz, z0, z1, h, a
+  real :: dt, delz, z0, z1, h
   real :: rnd(2)
   real :: delta_ext, mixing_top
 
@@ -780,25 +804,24 @@ subroutine constant_k_name_above_bl(part, pextra)
 
 end subroutine constant_k_name_above_bl
 
-subroutine tke_diffusion(part, pextra)
+subroutine tke_diffusion(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: tke_hyb, pressures, hlevel2, hinterf
-  USE snapgrdML, only: ivlayer
+  USE snapfldML, only: hinterf
   USE snapdimML, only: nk
-  use ieee_arithmetic, only : ieee_is_nan
 
   type(Particle), intent(inout)  :: part
   type(extraParticle), intent(inout) :: pextra
 
-  integer :: i, j, k, kp, part_vert_index
+  real, intent(in) :: dt_remaining
+  logical, intent(in) :: adaptive
+
+  integer :: i, j, k
   real :: sigu, sigv, sigw
-  real :: tke_z, yl, yl_up, yl_down, sum, e1, part_z
+  real :: part_z
   real :: tlu, tlv, tlw
   real :: ru, rv, rw
   real :: delz, dt, rhoaux
   real :: dttlw
-  real :: pttprof(nk), pttrefprof(nk)
-  integer :: indz, indzp
   real :: r, cp, g
 
   ! Physical constants
@@ -812,7 +835,6 @@ subroutine tke_diffusion(part, pextra)
   do k = 1, nk-1
     if (part%zmetres <= hinterf(i, j, k+1)) exit
   end do
-  dt = part%ptstep
   part_z = part%zmetres
 
   call calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu, tlv, tlw)
@@ -821,27 +843,29 @@ subroutine tke_diffusion(part, pextra)
 
   rhoaux = pextra%rhograd/pextra%rho
 
-  dttlw = dt/tlw
+  call set_turbulence_timestep(part, dt_remaining, adaptive)
+
+  dttlw = part%ptstep/tlw
 
   if (nrand+2.gt.max_rands) nrand=1
 
   ! Vertical turbulence
   if (dttlw.lt..5) then
-    part%turbvelw = (1.-dttlw)*part%turbvelw+rands(nrand)*sqrt(2.*dttlw)+dt*rhoaux*sigw
+    part%turbvelw = (1.-dttlw)*part%turbvelw+rands(nrand)*sqrt(2.*dttlw)+part%ptstep*rhoaux*sigw
   else
       rw = exp(-dttlw)
     part%turbvelw = rw*part%turbvelw+rands(nrand)*sqrt(1.-rw**2)+tlw*(1.-rw)*rhoaux*sigw
   end if
 
-  delz = part%turbvelw * sigw * dt
+  delz = part%turbvelw * sigw * part%ptstep
 
   call vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, sigw, part%turbvelw, delz)
 
   part%zmetres = part_z
 
   ! Horizontal turbulence
-  ru = exp(-dt / tlu)
-  rv = exp(-dt / tlv)
+  ru = exp(-part%ptstep / tlu)
+  rv = exp(-part%ptstep / tlv)
   part%turbvelu = ru * part%turbvelu + rands(nrand+1) * sqrt(1.0 - ru**2) * sigu
   part%turbvelv = rv * part%turbvelv + rands(nrand+2) * sqrt(1.0 - rv**2) * sigv
 
@@ -851,8 +875,7 @@ end subroutine tke_diffusion
 
 subroutine vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, sigw, part_turbvelw, delz)
 
-  USE snapfldML, only: hlevel2, hlayer2, hinterf, tke_hyb
-  USE snapgrdML, only: ivlayer
+  USE snapfldML, only: hlevel2, hinterf
   USE snapdimML, only: nk
 
   ! Arguments:
@@ -862,12 +885,11 @@ subroutine vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, 
   real(4), intent(inout) :: part_z, delz
   real(8), intent(inout) :: part_turbvelw
 
-  integer :: indz_c, indzp_c, dir, ind, part_vert_index, k_c, interface_ind, num_loops=1
-  real :: z_bot, z_top, z_bot_next, z_top_next
+  integer :: dir, k_c
+  real :: z_bot, z_top
   real :: ts, ratio, sigw_c, tlw_c
   real :: rnd(1)
   logical :: reflect
-  real :: zt_tmp
 
   do
     call random_number(rnd)
@@ -946,18 +968,14 @@ end subroutine vertical_reflection_step
 subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
 
   USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: tke_hyb, t2, pressures, hlevel2, dudxprof, dvdyprof, dwdzprof, pttprof, pttrefprof
-  USE snapgrdML, only: ivlayer
+  USE snapfldML, only: tke_hyb, hlevel2, dudxprof, dvdyprof, dwdzprof, pttprof, pttrefprof
   USE snapdimML, only: nk
-  use ieee_arithmetic, only : ieee_is_nan
 
   integer, intent(in) :: i, j, k
   real, intent(inout) :: tlu, tlv, tlw, sigu, sigv, sigw
 
   integer :: kp, part_vert_index
   real :: tke_z, yl, yl_up, yl_down, sum, e1
-  real :: ru, rv, rw
-  real :: delz, dt
   real :: fu2, fv2, fw2
   integer :: indz, indzp
   real, parameter :: g = 9.80665
@@ -1216,9 +1234,7 @@ subroutine metres_to_eta(part, pextra)
   j = part%y
   z = part%zmetres
 
-  !write(*,*) i, j, z, part%turbvelu, part%turbvelv, part%turbvelw
-
-  do k = 2, nk-1
+  do k = 1, nk-1
     if (z < hlevel2(i,j,k+1)) exit
   end do
   k = max(1, min(k, nk-1))
@@ -1251,7 +1267,7 @@ subroutine interp_tke_profile_to_hybrid(p_tke, logp_tke, tke_prof, ntke, &
   real(kind=8), intent(in)  :: p_prof(nlev) ! pressures at model levels
   real(kind=8), intent(out) :: tke_hyb_prof(nlev) ! TKE at model levels
 
-  integer :: k, k1, k2, klo, khi, kmid
+  integer :: k, k1, k2
   real(kind=8) :: logp_h, w
   real(kind=8) :: pmin, pmax
 
@@ -1329,5 +1345,24 @@ subroutine interp_tke_to_hybrid_field
   end do
 
 end subroutine interp_tke_to_hybrid_field
+
+subroutine set_turbulence_timestep(part, dt_remaining, adaptive)
+  use particleML, only: Particle
+  implicit none
+
+  type(Particle), intent(inout) :: part
+  real, intent(in) :: dt_remaining
+  logical, intent(in) :: adaptive
+
+  if (adaptive) then
+     part%ptstep = min( part%tlw, &
+                        part%hbl / max(2.0 * abs(part%turbvelw * part%sigw), 1.e-5), &
+                        0.5 / max(abs(part%dsigwdz), 1.e-6) ) * 0.1
+     part%ptstep = max(part%ptstep, dt_min)
+     part%ptstep = min(part%ptstep, dt_remaining)
+  else
+     part%ptstep = dt_remaining
+  end if
+end subroutine
 
 end module rwalkML

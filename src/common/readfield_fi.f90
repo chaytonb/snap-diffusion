@@ -55,23 +55,22 @@ contains
     USE iso_fortran_env, only: error_unit
     USE snapfilML, only: iavail, filef, nctype
     USE snapfldML, only: &
-      xm, ym, u_io, v_io, w_io, t_io, ps_io, hbl_io, pmsl_io, hbl2, bl2, w2, surface_stress, &
-      garea, enspos, precip_io, t_abs_io, t2_abs, t2m, spec_humid, hflux, rel_humid, &
-      u_star2, w_star2, obukhov_l2, bl_io, tke
+      xm, ym, u_io, v_io, w_io, t_io, ps_io, hbl_io, pmsl_io, surface_stress, &
+      garea, enspos, precip_io, t_abs_io, t2_abs, t2m, spec_humid, hflux, &
+      bl_io, tke
     USE snapgrdML, only: alevel, blevel, vlevel, ahalf, bhalf, vhalf, &
                          gparam, klevel, ivlevel, imslp, igtype, ivlayer, ivcoor
     USE snapmetML, only: met_params, xy_wind_units, pressure_units, omega_units, &
                          sigmadot_units, temp_units, requires_precip_deaccumulation, &
-                         downward_momentum_flux_units, surface_heat_flux_units, &
-                         mass_fraction_units, acc_momentum_flux_units,surface_roughness_length_units, &
-                         accum_surface_heat_flux_units, surface_heat_flux_units, &
-                         accum_downward_momentum_flux_units
+                         downward_momentum_flux_units, &
+                         mass_fraction_units,surface_roughness_length_units, &
+                         accum_surface_heat_flux_units, accum_downward_momentum_flux_units
     USE snapdimML, only: nx, ny, nk, output_resolution_factor, hres_field, surface_index
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
     USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme, interp_tke_to_hybrid_field, &
-                       turbulence_fields_required, diffusion_in_metres
+                       turbulence_fields_required
     USE forwrdML, only: w_eta_to_m
     USE compheightML, only: compheight
 !> current timestep (always positive), negative istep means reset
@@ -445,8 +444,6 @@ contains
       v_io = -v_io
       w_io = -w_io
     end if
-
-    if (diffusion_in_metres) call w_eta_to_m
     
 ! test---------------------------------------------------------------
     write (iulog, *) 'k,k_model,alevel,blevel,vlevel,p,dp:'
@@ -1178,18 +1175,13 @@ contains
 
 
 subroutine convert_hbl_to_vbl(hbl, vbl)
-  use snapfldML, only: ps2, t2_abs, hlevel2
+  use snapfldML, only: ps2, hlevel2
   use snapdimML, only: nx, ny, nk
   use snapgrdML, only: alevel, blevel
 
   real, intent(inout) :: hbl(:, :)
   real, intent(out) :: vbl(:, :)
   
-  real, parameter :: r=287, g=9.81
-
-  real :: deltah(nx, ny, nk)
-  real :: pe(nx, ny)
-  real :: pe2(nx, ny)
   integer :: above_index(nx, ny)
   integer :: below_index(nx, ny)
 
@@ -1199,7 +1191,7 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
   real :: pressure_below, pressure_above
 
   where (hbl < 50.0) hbl = 50.0
-  where (hbl > 2000.0) hbl = 2000.0
+  where (hbl > 3000.0) hbl = 3000.0
 
   ! Find the height level corresponding to the one immediately above the boundary layer height
   above_index = nk

@@ -114,8 +114,6 @@ subroutine edcomp(nx,ny,nz,u,v,edot,ps,xmd2h,ymd2h, &
     ahalf,bhalf,vhalf)
 !    uu,vv,dpsdt,edoth) no longer needed as output, but used as temporary arrays
 
-  USE snapgrdML, only: alevel, blevel, vlevel
-
   integer, intent(in) :: nx,ny,nz
   real, intent(in) ::    u(nx,ny,nz),v(nx,ny,nz)
   real, intent(inout) :: edot(nx,ny,nz)
@@ -219,10 +217,9 @@ end subroutine edcomp
 
 subroutine pressure_to_eta(w2)
 
-  USE snapgrdML, only: ahalf, bhalf, vhalf, klevel, gparam, vlevel, alevel, blevel, vhalf
-  USE snapfldML, only: xm, ym, ps2, u2, v2, hlevel2
+  USE snapgrdML, only: ahalf, bhalf, vhalf
+  USE snapfldML, only: ps2
   USE snapdimML, only: nx,ny,nk
-  USE snapdebug, only: iulog
 
   real, intent(inout) :: w2(nx, ny, nk)
   real :: weta(nx,ny,nk)

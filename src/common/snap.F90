@@ -187,7 +187,8 @@ PROGRAM bsnap
   USE rmpartML, only: rmpart
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
-  USE rwalkML, only: rwalk_init, diffusion_scheme, blfullmix, eta_to_metres, metres_to_eta, turbulence_fields_required
+  USE rwalkML, only: rwalk_init, diffusion_scheme, blfullmix, eta_to_metres, metres_to_eta, turbulence_fields_required, &
+                     diffusion_in_metres
   USE advance_particleML, only: advance_particle_position
   USE milibML, only: xyconvert, GEO_PARAMS
   USE forwrdML, only: forwrd
@@ -242,7 +243,6 @@ PROGRAM bsnap
   logical :: autodetect_grid_params = .false.
   integer :: m, np, npl, nlevel, ifltim = 0
   logical :: synoptic_output = .false.
-  logical :: diffusion_in_metres = .false.
   integer :: gaussian_smoothing_max_age_hr = 48
   integer :: gaussian_smoothing_kernel_size = 1 ! one means off
   integer :: k, ierror, i, n
@@ -389,6 +389,8 @@ PROGRAM bsnap
         .OR. diffusion_scheme == 'random_walk_name' .OR. diffusion_scheme == 'TKE') then
     turbulence_fields_required = .TRUE.
   endif
+
+  if (diffusion_scheme /= '') diffusion_in_metres = .TRUE.
 
 !..check input FELT files and make sorted lists of available data
 !..make main list based on x wind comp. (u) in upper used level
@@ -837,7 +839,6 @@ PROGRAM bsnap
             m = def_comp(pdata(np)%icomp)%to_output
             total_activity_lost_domain(m) = total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
           endif
-
 
           if (pdata(np)%is_active()) then
             if (pdata(np)%hbl > mhmax) mhmax = pdata(np)%hbl

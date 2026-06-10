@@ -48,8 +48,9 @@ module readfieldML
     USE datetime, only: datetime_t
     USE snapdebug, only: iulog, idebug
     USE snapgrdML, only: gparam, igtype
+    USE forwrdML, only: w_eta_to_m
     USE rwalkML, only: bl_definition, air_density, diffusion_fields, turbulence_fields_required, &
-                        diffusion_scheme
+                       diffusion_in_metres
 
     USE iso_fortran_env, only: error_unit
 !> file type (netcdf or fimex)
@@ -93,10 +94,8 @@ module readfieldML
       call diffusion_fields
     endif
 
-    ! Compute vertical gradient fields for TKE scheme
-    if (diffusion_scheme == 'TKE') then
-        
-    endif
+    ! If diffusion scheme operates in metre space, convert vertical velocity to m/s
+    if (diffusion_in_metres) call w_eta_to_m
 
   end subroutine readfield_and_compute
 

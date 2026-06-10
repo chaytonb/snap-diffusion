@@ -32,6 +32,8 @@ module particleML
         real(real64)   :: turbvelw
         !> vertical gradient of sigw
         real(real64)   :: dsigwdz
+        !> Standard deviation of turbulent vertical velocity
+        real         :: sigw
         !> Lagrangian timescale
         real         :: tlw = 50
         !> Particle timestep
