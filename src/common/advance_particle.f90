@@ -89,12 +89,12 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
 
       ! Accumulate horizontal velocities
       if (.not. well_mixed_test) then
-          ux = ux + part%ptstep * (pextra%u + part%turbvelu)
-          vx = vx + part%ptstep * (pextra%v + part%turbvelv)
+        ux = ux + part%ptstep * (pextra%u + part%turbvelu)
+        vx = vx + part%ptstep * (pextra%v + part%turbvelv)
+        ! Apply vertical advection
+        part%zmetres = max(part%zmetres + pextra%w * part%ptstep, 0.5)
       endif
 
-      ! Apply vertical advection
-      part%zmetres = max(part%zmetres + pextra%w * part%ptstep, 0.5)
       t_local = t_local + part%ptstep
 
       ! ABL top exit condition, complete step above ABL
@@ -115,8 +115,8 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
      if (.not. well_mixed_test) then
         ux = ux + part%ptstep * (pextra%u + part%turbvelu)
         vx = vx + part%ptstep * (pextra%v + part%turbvelv)
+        part%zmetres = part%zmetres + pextra%w * part%ptstep
      endif
-     part%zmetres = part%zmetres + pextra%w * part%ptstep
   endif
 
   ! Apply accumulated horizontal displacement
@@ -138,6 +138,7 @@ subroutine step_standard_single(part, pextra, tnow, tstep, tf1, tf2)
   real :: dt_remaining
 
   dt_remaining = tstep
+  part%ptstep = tstep
 
   ! Calculate advective velocities
   if (.not. well_mixed_test) call forwrd(tf1, tf2, tnow, tstep, part, pextra)
@@ -149,10 +150,9 @@ subroutine step_standard_single(part, pextra, tnow, tstep, tf1, tf2)
   if (.not. well_mixed_test) then
     part%x = part%x + (part%turbvelu + pextra%u) * part%ptstep * pextra%rmx
     part%y = part%y + (part%turbvelv + pextra%v) * part%ptstep * pextra%rmy
+    ! Apply vertical advection
+    part%zmetres = part%zmetres + pextra%w * part%ptstep
   endif
-
-  ! Apply vertical advection
-  part%zmetres = part%zmetres + pextra%w * part%ptstep
 
 end subroutine step_standard_single
 

@@ -37,31 +37,27 @@ module init_random_seedML
 
   END SUBROUTINE
 
-  SUBROUTINE generate_normal_randoms(x, n)
+  subroutine generate_normal_randoms(x, n)
+    implicit none
+    integer, intent(in) :: n
+    real, intent(out) :: x(n)
+    integer :: i
+    real :: u1, u2
+    real, parameter :: pi = 3.141592653589793
 
-  implicit none
-  integer, intent(in) :: n
-  real, intent(out) :: x(n)
-  integer :: i
-  real :: u1, u2, z
-  real, parameter :: pi = 3.141592653589793
-
-  call random_seed()  ! initialize RNG from system clock
-
-  i = 1
-  do while (i <= n)
+    i = 1
+    do while (i <= n)
       call random_number(u1)
       call random_number(u2)
 
-      ! Box–Muller transform for standard normal
-      z = sqrt(-2.0*log(u1)) * cos(2.0*pi*u2)
+      if (u1 <= 0.0) cycle
 
-      if (abs(z) <= 3.0) then
-        x(i) = z
-        i = i + 1
+      x(i) = sqrt(-2.0*log(u1)) * cos(2.0*pi*u2)
+      if (i+1 <= n) then
+        x(i+1) = sqrt(-2.0*log(u1)) * sin(2.0*pi*u2)
       end if
-  end do
-
-  END SUBROUTINE
+      i = i + 2
+    end do
+  end subroutine
 
 end module init_random_seedML

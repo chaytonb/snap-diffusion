@@ -37,14 +37,14 @@ module rwalkML
   real, parameter :: dt_min = 1.0 ! minimum timestep size for adaptive timestepping
 
   ! Values for random number generation
-  integer(int32), parameter :: max_rands=6000000
+  integer(int32), parameter :: max_rands=10000000
   integer(int32) :: nrand=1
   real :: rands(max_rands) ! initialise array to store random numbers
 
   real(real64), save, public :: a_in_bl = 0.5
   real(real64), save, public :: a_above_bl = 0.25
   real(real64), save, public :: b = 0.875
-  logical, save, public :: turb_homogeneous = .TRUE.
+  logical, save, public :: turb_homogeneous = .FALSE.
   logical, save, public :: well_mixed_test = .FALSE.
   logical, save, public :: blfullmix = .FALSE.
   logical, save, public :: diffusion_in_metres = .FALSE.
@@ -729,35 +729,42 @@ subroutine variable_k_name_above_bl(part, pextra)
 
 end subroutine variable_k_name_above_bl
 
-subroutine constant_k_name_within_bl(part, pextra) 
+subroutine constant_k_name_within_bl(part, pextra)
   USE particleML, only: extraParticle, Particle
-  
+
   !> particle with information
-  type(Particle), intent(inout)  :: part
+  type(Particle), intent(inout) :: part
   !> extra information regarding the particle
   type(extraParticle), intent(inout) :: pextra
 
   ! Locals
   real :: rnd(1)
-  real :: sigma_ft, delta_ext, mixing_top
-
   integer, parameter :: hor_diffu = 5300 ! m^2 s^-1 (BL horizontal diffusion)
   real, parameter :: K_ft = 1.5 ! m^2 s^-1 (FT vertical diffusion)
-  real, parameter :: alpha = 1.7 ! entrainment zone extension factor
+  real :: dt, delz
 
-  ! Compute free troposphere displacement length scale
-  sigma_ft = sqrt(2.0 * K_ft * tstep) 
-  delta_ext = alpha * sigma_ft
+  dt = tstep
 
-  mixing_top = part%hbl + delta_ext
-
-  if (nrand+1.gt.max_rands) nrand=1
+  if (nrand+2.gt.max_rands) nrand=1
   part%turbvelu = ((2*hor_diffu)/tstep)**0.5 * rands(nrand)
   part%turbvelv = ((2*hor_diffu)/tstep)**0.5 * rands(nrand+1)
-  nrand=nrand+2
+  part%turbvelw = sqrt((2.0 * K_ft) / dt) * rands(nrand + 2)
+  nrand=nrand+3
 
   call random_number(rnd)
-  part%zmetres = rnd(1) * mixing_top
+  part%zmetres = rnd(1) * part%hbl
+
+  ! Apply a vertical step equal in size to FT diffusion
+  delz = part%turbvelw * dt
+
+  ! Reflection and position updates
+  if (delz.lt.-part%zmetres) then         ! reflection at ground
+    part%zmetres = -part%zmetres - delz
+  else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
+    part%zmetres = -part%zmetres-delz+2.*part%hbl
+  else                         ! no reflection
+    part%zmetres = part%zmetres+delz
+  endif
 
 end subroutine constant_k_name_within_bl
 
@@ -770,10 +777,8 @@ subroutine constant_k_name_above_bl(part, pextra)
 
   real, parameter :: hor_diffu_ft = 5300.0/4.0 ! m^2 s^-1
   real, parameter :: K_ft = 1.5 ! m^2 s^-1
-  real, parameter :: alpha = 1.7 ! entrainment zone extension factor
   real :: dt, delz, z0, z1, h
-  real :: rnd(2)
-  real :: delta_ext, mixing_top
+  real :: rnd(1)
 
   dt = tstep
   h = part%hbl ! BL height at the particle location/time
@@ -785,22 +790,14 @@ subroutine constant_k_name_above_bl(part, pextra)
   part%turbvelw = sqrt((2.0 * K_ft) / dt) * rands(nrand + 2)
   nrand = nrand + 3
 
-  ! Vertical step
-  z0 = part%zmetres
+  ! Apply a vertical step equal in size to FT diffusion
   delz = part%turbvelw * dt
-  z1 = z0 + delz
 
-  mixing_top = part%hbl + delta_ext
-
-  if (z1 <= mixing_top) then
-    ! End-point crosses into BL, then instant-mix within BL
-    call random_number(rnd)
-    part%zmetres = rnd(1) * mixing_top
-    return
-  end if
-
-  ! No crossing, then accept the FT step
-  part%zmetres = z1
+  if (part%zmetres+delz .lt. part%hbl) then
+    part%zmetres = 2*part%hbl - (part%zmetres + delz)
+  else
+    part%zmetres = part%zmetres + delz
+  endif
 
 end subroutine constant_k_name_above_bl
 
