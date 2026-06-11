@@ -108,9 +108,9 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
   elseif (diffusion_scheme == 'variable_k') then
     ! Check if particle within abl
     if (part%zmetres.lt.part%hbl) then
-      call variable_k_name_within_bl(part, pextra)
+      call variable_k_within_bl(part, pextra)
     else
-      call variable_k_name_above_bl(part, pextra)
+      call variable_k_above_bl(part, pextra)
     endif
   elseif (diffusion_scheme == 'random_walk_name') then
     ! Check if particle within abl
@@ -119,12 +119,12 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
     else
       call name_random_walk_profile_above_bl(part, pextra, dt_remaining)
     endif
-  elseif (diffusion_scheme == 'constant_k') then
+  elseif (diffusion_scheme == 'fixed_k') then
     ! Check if particle within abl
     if (part%zmetres.lt.part%hbl) then
-      call constant_k_name_within_bl(part, pextra)
+      call fixed_k_within_bl(part, pextra)
     else
-      call constant_k_name_above_bl(part, pextra)
+      call fixed_k_above_bl(part, pextra)
     endif
   elseif (diffusion_scheme == 'TKE') then
     call tke_diffusion(part, pextra, dt_remaining, adaptive)
@@ -604,7 +604,7 @@ subroutine name_random_walk_profile_above_bl(part, pextra, dt_remaining)
 
 end subroutine name_random_walk_profile_above_bl
 
-subroutine variable_k_name_within_bl(part, pextra) 
+subroutine variable_k_within_bl(part, pextra) 
   USE particleML, only: extraParticle, Particle
   
   !> particle with information
@@ -690,9 +690,9 @@ subroutine variable_k_name_within_bl(part, pextra)
     part%zmetres = part%zmetres+delz
   endif
 
-end subroutine variable_k_name_within_bl
+end subroutine variable_k_within_bl
 
-subroutine variable_k_name_above_bl(part, pextra) 
+subroutine variable_k_above_bl(part, pextra) 
   USE particleML, only: extraParticle, Particle
   
   !> particle with information
@@ -727,9 +727,9 @@ subroutine variable_k_name_above_bl(part, pextra)
     part%zmetres = part%zmetres + delz
   endif
 
-end subroutine variable_k_name_above_bl
+end subroutine variable_k_above_bl
 
-subroutine constant_k_name_within_bl(part, pextra)
+subroutine fixed_k_within_bl(part, pextra)
   USE particleML, only: extraParticle, Particle
 
   !> particle with information
@@ -766,9 +766,9 @@ subroutine constant_k_name_within_bl(part, pextra)
     part%zmetres = part%zmetres+delz
   endif
 
-end subroutine constant_k_name_within_bl
+end subroutine fixed_k_within_bl
 
-subroutine constant_k_name_above_bl(part, pextra)
+subroutine fixed_k_above_bl(part, pextra)
   use particleML, only: extraParticle, Particle
   implicit none
 
@@ -799,7 +799,7 @@ subroutine constant_k_name_above_bl(part, pextra)
     part%zmetres = part%zmetres + delz
   endif
 
-end subroutine constant_k_name_above_bl
+end subroutine fixed_k_above_bl
 
 subroutine tke_diffusion(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle

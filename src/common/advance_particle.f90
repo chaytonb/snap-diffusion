@@ -23,7 +23,7 @@ subroutine advance_particle_position(part, pextra, tnow, tstep, rt1, rt2, tf1, t
   if (adaptive) then
      call step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   else
-     call step_standard_single(part, pextra, tnow, tstep, tf1, tf2)
+     call step_standard_single(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   endif
 
 end subroutine advance_particle_position
@@ -126,15 +126,16 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
 end subroutine step_adaptive_loop
 
 
-subroutine step_standard_single(part, pextra, tnow, tstep, tf1, tf2)
+subroutine step_standard_single(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
 
   USE forwrdML, only: forwrd
-  USE rwalkML, only: turbulence_master, well_mixed_test
+  USE rwalkML, only: turbulence_master, well_mixed_test, diffusion_scheme
   USE particleML, only: extraParticle, Particle
+  USE posintML, only: vert_interpol_rho_only
 
   type(Particle), intent(inout) :: part
   type(extraParticle), intent(inout) :: pextra
-  real, intent(in) :: tnow, tstep, tf1, tf2
+  real, intent(in) :: tnow, tstep, rt1, rt2, tf1, tf2
   real :: dt_remaining
 
   dt_remaining = tstep
@@ -142,6 +143,9 @@ subroutine step_standard_single(part, pextra, tnow, tstep, tf1, tf2)
 
   ! Calculate advective velocities
   if (.not. well_mixed_test) call forwrd(tf1, tf2, tnow, tstep, part, pextra)
+
+  ! Interpolated density values required for Langevin scheme
+  if (diffusion_scheme == 'random_walk_flexpart') call vert_interpol_rho_only(part, pextra, rt1, rt2)
 
   ! Calculate turbulent velocities and apply vertical turbulent displacement
   call turbulence_master(part, pextra, dt_remaining, .FALSE.)

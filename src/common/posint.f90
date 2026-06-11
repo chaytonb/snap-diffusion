@@ -6,7 +6,7 @@ module posintML
   implicit none
   private
 
-  public :: posint, posint_vert, posint_newlevel
+  public :: posint, posint_vert, posint_newlevel, vert_interpol_rho_only
 
   contains
 
@@ -199,5 +199,67 @@ subroutine posint_newlevel(part, pextra, k, uprof, vprof, wprof, rhoprof, rhogra
               +rt2*interp(rhograd2(i,j,k), rhograd2(i+1,j,k), rhograd2(i,j+1,k), rhograd2(i+1,j+1,k), c1, c2, c3, c4)
 
 end subroutine posint_newlevel
+
+subroutine vert_interpol_rho_only(part, pextra, rt1, rt2)
+  
+  USE particleML, only: Particle, extraParticle
+  USE snapfldML, only: hlevel2, rho1, rho2, rhograd1, rhograd2
+  use snapdimML, only: nk
+
+  type(Particle), intent(in) :: part
+  type(extraParticle), intent(inout) :: pextra
+
+  real, intent(in) :: rt1
+  real, intent(in) :: rt2
+  
+  real :: particle_z, below_level, above_level, frac
+  integer :: i,j,k
+  real :: dx,dy,c1,c2,c3,c4
+  real :: rho_below, rho_above, rhograd_below, rhograd_above
+
+  i = part%x
+  j = part%y
+  dx=part%x-i
+  dy=part%y-j
+  c1=(1.-dy)*(1.-dx)
+  c2=(1.-dy)*dx
+  c3=dy*(1.-dx)
+  c4=dy*dx
+
+  ! Identify bracketing vertical model levels
+  do k = 1, nk-1
+    if (part%zmetres <= hlevel2(i, j, k+1)) exit
+  end do
+  k = max(1, min(k, nk-1))
+
+  below_level = hlevel2(i, j, k)
+  above_level = hlevel2(i, j, k+1)
+
+  if (above_level /= below_level) then
+    frac = (particle_z - below_level) / (below_level)
+  else
+    frac = 0.0
+  end if
+
+  frac = max(0.0, min(1.0, frac))
+
+  ! Interpolate horizontally and in time
+  ! .. air density
+  rho_below = rt1*interp(rho1(i,j,k), rho1(i+1,j,k), rho1(i,j+1,k), rho1(i+1,j+1,k), c1, c2, c3, c4) &
+              +rt2*interp(rho2(i,j,k), rho2(i+1,j,k), rho2(i,j+1,k), rho2(i+1,j+1,k), c1, c2, c3, c4)
+  rho_above = rt1*interp(rho1(i,j,k+1), rho1(i+1,j,k+1), rho1(i,j+1,k+1), rho1(i+1,j+1,k+1), c1, c2, c3, c4) &
+              +rt2*interp(rho2(i,j,k+1), rho2(i+1,j,k+1), rho2(i,j+1,k+1), rho2(i+1,j+1,k+1), c1, c2, c3, c4)
+
+  ! .. air density gradient
+  rhograd_below = rt1*interp(rhograd1(i,j,k), rhograd1(i+1,j,k), rhograd1(i,j+1,k), rhograd1(i+1,j+1,k), c1, c2, c3, c4) &
+              +rt2*interp(rhograd2(i,j,k), rhograd2(i+1,j,k), rhograd2(i,j+1,k), rhograd2(i+1,j+1,k), c1, c2, c3, c4)
+  rhograd_above = rt1*interp(rhograd1(i,j,k+1), rhograd1(i+1,j,k+1), rhograd1(i,j+1,k+1), rhograd1(i+1,j+1,k+1), c1, c2, c3, c4) &
+              +rt2*interp(rhograd2(i,j,k+1), rhograd2(i+1,j,k+1), rhograd2(i,j+1,k+1), rhograd2(i+1,j+1,k+1), c1, c2, c3, c4)
+
+  ! interpolate fields linearly at vertical position
+  pextra%rho = rho_below * (1.0-frac) + rho_above * frac
+  pextra%rhograd = rhograd_below * (1.0-frac) + rhograd_above * frac
+
+end subroutine vert_interpol_rho_only
 
 end module posintML
