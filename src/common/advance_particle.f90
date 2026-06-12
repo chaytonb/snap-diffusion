@@ -129,7 +129,7 @@ end subroutine step_adaptive_loop
 subroutine step_standard_single(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
 
   USE forwrdML, only: forwrd
-  USE rwalkML, only: turbulence_master, well_mixed_test, diffusion_scheme
+  USE rwalkML, only: turbulence_master, well_mixed_test, diffusion_scheme, diffusion_in_metres
   USE particleML, only: extraParticle, Particle
   USE posintML, only: vert_interpol_rho_only
 
@@ -151,7 +151,7 @@ subroutine step_standard_single(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   call turbulence_master(part, pextra, dt_remaining, .FALSE.)
 
   ! Apply horizontal advection and diffusion
-  if (.not. well_mixed_test) then
+  if (.not.well_mixed_test .and. diffusion_in_metres) then
     part%x = part%x + (part%turbvelu + pextra%u) * part%ptstep * pextra%rmx
     part%y = part%y + (part%turbvelv + pextra%v) * part%ptstep * pextra%rmy
     ! Apply vertical advection

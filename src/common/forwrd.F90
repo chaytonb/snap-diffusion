@@ -26,6 +26,7 @@ subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra)
   USE iso_fortran_env, only: real64
   USE particleML, only: particle, extraParticle
   USE snapgrdML, only: vlevel
+  USE rwalkML, only: diffusion_in_metres
 !> time in seconds for field set 1 (e.g. 0.)
   real, intent(in) :: tf1
 !> time in seconds for field set 2 (e.g. 21600, if 6 hours)
@@ -79,9 +80,11 @@ subroutine forwrd(tf1, tf2, tnow, tstep, part, pextra)
   endif
 #else
 
-  ! part%x = part%x + dx1*pextra%rmx
-  ! part%y = part%y + dy1*pextra%rmy
-  ! part%z = part%z + dz1
+  if (.not.diffusion_in_metres) then
+    part%x = part%x + dx1*pextra%rmx
+    part%y = part%y + dy1*pextra%rmy
+    part%z = part%z + dz1
+  endif
 
 #endif
   part%z = min(part%z, dble(vlevel(1)))
