@@ -6,7 +6,7 @@ module posintML
   implicit none
   private
 
-  public :: posint, posint_vert, posint_newlevel, vert_interpol_rho_only
+  public :: posint, posint_vert, posint_newlevel, vert_interpol_rho_only, calculate_gradient_profiles
 
   contains
 
@@ -261,5 +261,80 @@ subroutine vert_interpol_rho_only(part, pextra, rt1, rt2)
   pextra%rhograd = rhograd_below * (1.0-frac) + rhograd_above * frac
 
 end subroutine vert_interpol_rho_only
+
+subroutine calculate_gradient_profiles(part, pextra, rt1, rt2)
+
+  ! Creates gradient profiles used for partitioning TKE in 3D
+
+  USE particleML, only: Particle, extraParticle
+  USE snapfldML, only: u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, w_z1, w_z2, &
+                       dudxprof, dvdyprof, dwdzprof, pttprof, hlevel2, xm, ym, pttrefprof
+  use snapdimML, only: nk
+
+  type(Particle), intent(in) :: part
+  type(extraParticle), intent(inout) :: pextra
+
+  real, intent(in) :: rt1
+  real, intent(in) :: rt2
+
+  integer :: i,j,k
+  real :: dx,dy,c1,c2,c3,c4
+  real :: dz1,dz2,ut1,ut2,vt1,vt2,wt1,wt2,w
+  real :: th,tt1,tt2,ps,p,pi,t,gravity
+  real :: u_left, u_right, v_bottom, v_top
+  real :: w_k, w_kp1, z_k, z_kp1
+
+  !..for horizontal interpolations
+  i = part%x
+  j = part%y
+  dx = part%x-i
+  dy = part%y-j
+  c1 = (1.-dy)*(1.-dx)
+  c2 = (1.-dy)*dx
+  c3 = dy*(1.-dx)
+  c4 = dy*dx
+
+  do k = 1, nk
+      
+    ! Potential temperature profile at particle position
+    tt1 = interp(t1(i,j,k), t1(i+1,j,k), t1(i,j+1,k), t1(i+1,j+1,k), c1, c2, c3, c4)
+    tt2 = interp(t2(i,j,k), t2(i+1,j,k), t2(i,j+1,k), t2(i+1,j+1,k), c1, c2, c3, c4)
+    pttprof(k) = tt1*rt1 + tt2*rt2
+
+    pttrefprof(k) = pttprof(k)
+    
+    ! Horizontal Gradients 
+    u_left  = rt1 * ((1.0 - dy)*u1(i,j,k) + dy*u1(i,j+1,k)) + &
+              rt2 * ((1.0 - dy)*u2(i,j,k) + dy*u2(i,j+1,k))
+    u_right = rt1 * ((1.0 - dy)*u1(i+1,j,k) + dy*u1(i+1,j+1,k)) + &
+              rt2 * ((1.0 - dy)*u2(i+1,j,k) + dy*u2(i+1,j+1,k))
+    dudxprof(k) = (u_right - u_left) * xm(i, j)
+
+    v_bottom = rt1 * ((1.0 - dx)*v1(i,j,k) + dx*v1(i+1,j,k)) + &
+                rt2 * ((1.0 - dx)*v2(i,j,k) + dx*v2(i+1,j,k))
+    v_top    = rt1 * ((1.0 - dx)*v1(i,j+1,k) + dx*v1(i+1,j+1,k)) + &
+                rt2 * ((1.0 - dx)*v2(i,j+1,k) + dx*v2(i+1,j+1,k))
+    dvdyprof(k) = (v_top - v_bottom) * ym(i, j)
+
+    ! Vertical Gradient 
+    if (k < nk) then
+        w_k = interp(w1(i,j,k), w1(i+1,j,k), w1(i,j+1,k), w1(i+1,j+1,k), c1, c2, c3, c4)
+        w_kp1 = interp(w1(i,j,k+1), w1(i+1,j,k+1), w1(i,j+1,k+1), w1(i+1,j+1,k+1), c1, c2, c3, c4)
+        
+        ! Map heights across layers 
+        z_k = interp(hlevel2(i,j,k), hlevel2(i+1,j,k), hlevel2(i,j+1,k), hlevel2(i+1,j+1,k), c1, c2, c3, c4)
+        z_kp1 = interp(hlevel2(i,j,k+1), hlevel2(i+1,j,k+1), hlevel2(i,j+1,k+1), hlevel2(i+1,j+1,k+1), c1, c2, c3, c4)
+        
+        dwdzprof(k) = (w_kp1 - w_k) / max((z_kp1 - z_k), 1.0)
+    else
+        dwdzprof(k) = 0.0
+    end if
+  end do
+  
+  ! Meaningless values on first layer
+  pttprof(1) = pttprof(2)
+  pttrefprof(1) = pttrefprof(2)
+
+end subroutine calculate_gradient_profiles
 
 end module posintML

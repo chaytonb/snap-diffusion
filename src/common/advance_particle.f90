@@ -17,7 +17,6 @@ subroutine advance_particle_position(part, pextra, tnow, tstep, rt1, rt2, tf1, t
   real, intent(in)                   :: tnow, tstep, rt1, rt2, tf1, tf2 ! Time interpolation variables
   logical, intent(in)                :: adaptive
 
-  ! PULL INTERPOLATION: Only calculate tbl if the scheme/definition requires it
   if (bl_definition == 'constant') call set_constant_bl(part)
 
   if (adaptive) then
@@ -32,7 +31,7 @@ end subroutine advance_particle_position
 subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
 
   USE particleML, only: extraParticle, Particle
-  USE posintML, only: posint_newlevel, posint_vert
+  USE posintML, only: posint_newlevel, posint_vert, calculate_gradient_profiles
   USE snapfldML, only: hlevel2
   USE rwalkML, only: diffusion_scheme, turbulence_master, well_mixed_test
   USE forwrdML, only: forwrd
@@ -57,8 +56,10 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   ! Calculate advective velocities
   if (.not. well_mixed_test) call forwrd(tf1, tf2, tnow, tstep, part, pextra)
 
+  if (diffusion_scheme == 'TKE') call calculate_gradient_profiles(part, pextra, rt1, rt2)
+
   ! Apply adaptive timesteps in the ABL
-  if (part%zmetres < part%hbl) then
+  if (part%zmetres < part%hbl .OR. diffusion_scheme == 'TKE') then
     do while (t_local < tstep)
 
       i = part%x

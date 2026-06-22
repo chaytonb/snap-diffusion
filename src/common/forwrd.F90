@@ -116,13 +116,12 @@ subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
   USE particleML, only: particle
   USE snapgrdML, only: vlevel, vhalf, alevel, ahalf, blevel, bhalf, &
       ivlayer, ivlevel
-  USE snapfldML, only: u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, w_z1, w_z2, &
-                       dudxprof, dvdyprof, dwdzprof, pttprof, hlevel2, xm, ym, pttrefprof
+  USE snapfldML, only: u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, w_z1, w_z2
   USE snaptabML, only: cp, g, r, surface_height_sigma, exner
   USE vgravtablesML, only: vgrav
   USE snapdimML, only: nk
   USE snapparML, only: def_comp
-  USE rwalkML, only : diffusion_in_metres, diffusion_scheme
+  USE rwalkML, only : diffusion_in_metres
 
 !> time in seconds for field set 1 (e.g. 0.)
   real, intent(in) :: tf1
@@ -148,14 +147,11 @@ subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
 !> wind-speed in w
   real, intent(inout) :: w_save
 
-  integer :: i,j,k,m,ilvl,k1,k2,kt1,kt2
+  integer :: i,j,m,ilvl,k1,k2,kt1,kt2
   real :: dt,rt1,rt2,dx,dy,c1,c2,c3,c4,vlvl
   real :: dz1,dz2,ut1,ut2,vt1,vt2,wt1,wt2,w
   real :: th,tt1,tt2,ps,p,pi,t,gravity
   real :: pi1,pi2,dz,deta,wg
-
-  real :: u_left, u_right, v_bottom, v_top
-  real :: w_k, w_kp1, z_k, z_kp1
 
   real, parameter :: ginv = 1.0/g
   real, parameter :: cpinv = 1.0/cp
@@ -275,50 +271,6 @@ subroutine forwrd_dx(tf1, tf2, tnow, tstep, part, &
   !######################################################################
     w = w + wg
   end if
-
-  if (diffusion_scheme == 'TKE') then ! Create gradient profiles for TKE partitioning
-    do k = 1, nk
-        
-      ! Potential temperature profile at particle position
-      tt1 = interp(t1(i,j,k), t1(i+1,j,k), t1(i,j+1,k), t1(i+1,j+1,k), c1, c2, c3, c4)
-      tt2 = interp(t2(i,j,k), t2(i+1,j,k), t2(i,j+1,k), t2(i+1,j+1,k), c1, c2, c3, c4)
-      pttprof(k) = tt1*rt1 + tt2*rt2
-
-      pttrefprof(k) = pttprof(k)
-      
-      ! Horizontal Gradients 
-      u_left  = rt1 * ((1.0 - dy)*u1(i,j,k) + dy*u1(i,j+1,k)) + &
-                rt2 * ((1.0 - dy)*u2(i,j,k) + dy*u2(i,j+1,k))
-      u_right = rt1 * ((1.0 - dy)*u1(i+1,j,k) + dy*u1(i+1,j+1,k)) + &
-                rt2 * ((1.0 - dy)*u2(i+1,j,k) + dy*u2(i+1,j+1,k))
-      dudxprof(k) = (u_right - u_left) * xm(i, j)
-
-      v_bottom = rt1 * ((1.0 - dx)*v1(i,j,k) + dx*v1(i+1,j,k)) + &
-                 rt2 * ((1.0 - dx)*v2(i,j,k) + dx*v2(i+1,j,k))
-      v_top    = rt1 * ((1.0 - dx)*v1(i,j+1,k) + dx*v1(i+1,j+1,k)) + &
-                 rt2 * ((1.0 - dx)*v2(i,j+1,k) + dx*v2(i+1,j+1,k))
-      dvdyprof(k) = (v_top - v_bottom) * ym(i, j)
-
-      ! Vertical Gradient 
-      if (k < nk) then
-          w_k = interp(w1(i,j,k), w1(i+1,j,k), w1(i,j+1,k), w1(i+1,j+1,k), c1, c2, c3, c4)
-          w_kp1 = interp(w1(i,j,k+1), w1(i+1,j,k+1), w1(i,j+1,k+1), w1(i+1,j+1,k+1), c1, c2, c3, c4)
-          
-          ! Map heights across the terrain-following layers 
-          z_k = interp(hlevel2(i,j,k), hlevel2(i+1,j,k), hlevel2(i,j+1,k), hlevel2(i+1,j+1,k), c1, c2, c3, c4)
-          z_kp1 = interp(hlevel2(i,j,k+1), hlevel2(i+1,j,k+1), hlevel2(i,j+1,k+1), hlevel2(i+1,j+1,k+1), c1, c2, c3, c4)
-          
-          dwdzprof(k) = (w_kp1 - w_k) / max((z_kp1 - z_k), 1.0)
-      else
-          dwdzprof(k) = 0.0
-      end if
-    end do
-  
-  ! Garbage values on first layer
-  pttprof(1) = pttprof(2)
-  pttrefprof(1) = pttrefprof(2)
-  endif
-
 
   w_save = w
 

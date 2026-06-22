@@ -169,7 +169,7 @@ PROGRAM bsnap
   USE snapfilML, only: filef, itimer, ncsummary, nctitle, nhfmax, nhfmin, &
                        nctype, nfilef, simulation_start, spinup_steps
   USE snapfldML, only: nhfout, enspos, use_async_io, total_activity_lost_domain, &
-                       swap_fields_before_reading, swap_fields_after_reading
+                       swap_fields_before_reading, swap_fields_after_reading, tke
   USE snapmetML, only: init_meteo_params, met_params
   USE snapparML, only: component, run_comp, output_component, &
                        ncomp, nocomp, def_comp, nparnum, &

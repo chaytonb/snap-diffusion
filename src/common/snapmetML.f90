@@ -279,7 +279,7 @@ module snapmetML
       met_params%rel_humid = 'relative_humidity_2m'
       met_params%t2m = 'air_temperature_2m'
       met_params%spec_humid = 'specific_humidity_ml'
-      met_params%tke = 'TKE_pl'
+      met_params%tke = 'TKE_ml'
 
       
 !..get grid parameters from field identification

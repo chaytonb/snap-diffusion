@@ -54,7 +54,7 @@ module rwalkML
   character(len=64), save, public :: meteo_type = ''
   character(len=64), save, public :: entrainment_scheme = ''
 
-  public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres, interp_tke_to_hybrid_field, &
+  public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres, &
          metres_to_eta
 
   contains
@@ -224,7 +224,6 @@ end subroutine rwalk
 
 subroutine flexpart_diffusion_within_abl(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
-  use snapfldML, only: hbl2
   
   !> particle with information
   type(Particle), intent(inout)  :: part
@@ -250,7 +249,7 @@ subroutine flexpart_diffusion_within_abl(part, pextra, dt_remaining, adaptive)
   if (turb_homogeneous) then ! Take middle BL value if homogeneous
     scaled_height = 0.5
   else
-    scaled_height = part%zmetres/part%hbl
+    scaled_height = max(part%zmetres/part%hbl, 1e-3)
   endif
 
   ust = pextra%ust
@@ -441,7 +440,7 @@ subroutine name_random_walk_profile_within_bl(part, pextra, dt_remaining, adapti
   if (turb_homogeneous) then ! Take middle BL value if homogeneous
     scaled_height = 0.5
   else
-    scaled_height = part%zmetres/part%hbl
+    scaled_height = max(part%zmetres/part%hbl, 1e-3)
   endif
 
   k = 0.4
@@ -514,7 +513,7 @@ subroutine name_random_walk_profile_within_bl(part, pextra, dt_remaining, adapti
   ! ratio of time step to lagrangian timescale for autocorrelation
   dttlw = part%ptstep/tlw
 
-  if (nrand+1.gt.max_rands) nrand=1
+  if (nrand.gt.max_rands) nrand=1
   ! Calculate turbulent vertical velocity
   part%turbvelw=(1.-dttlw)*part%turbvelw + part%ptstep*dsigwdz &
                   + sqrt(2.*dttlw) * rands(nrand)
@@ -803,7 +802,7 @@ end subroutine fixed_k_above_bl
 
 subroutine tke_diffusion(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: hinterf
+  USE snapfldML, only: hlevel2
   USE snapdimML, only: nk
 
   type(Particle), intent(inout)  :: part
@@ -819,18 +818,12 @@ subroutine tke_diffusion(part, pextra, dt_remaining, adaptive)
   real :: ru, rv, rw
   real :: delz, dt, rhoaux
   real :: dttlw
-  real :: r, cp, g
-
-  ! Physical constants
-  r = 287.0
-  cp = 1004.0
-  g = 9.81
 
   i = part%x
   j = part%y
   ! Identify model layer of particle
   do k = 1, nk-1
-    if (part%zmetres <= hinterf(i, j, k+1)) exit
+    if (part%zmetres <= hlevel2(i, j, k+1)) exit
   end do
   part_z = part%zmetres
 
@@ -875,7 +868,6 @@ subroutine vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, 
   USE snapfldML, only: hlevel2, hinterf
   USE snapdimML, only: nk
 
-  ! Arguments:
   integer, intent(in) :: i, j
   integer, intent(inout) :: k
   real, intent(inout) :: tlu, tlv, sigu, sigv, sigw, tlw
@@ -965,7 +957,7 @@ end subroutine vertical_reflection_step
 subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
 
   USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: tke_hyb, hlevel2, dudxprof, dvdyprof, dwdzprof, pttprof, pttrefprof
+  USE snapfldML, only: tke, hlevel2, dudxprof, dvdyprof, dwdzprof, pttprof, pttrefprof
   USE snapdimML, only: nk
 
   integer, intent(in) :: i, j, k
@@ -974,44 +966,40 @@ subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
   integer :: kp, part_vert_index
   real :: tke_z, yl, yl_up, yl_down, sum, e1
   real :: fu2, fv2, fw2
-  integer :: indz, indzp
   real, parameter :: g = 9.80665
 
-  indz = k
-  indzp = min(k+1, nk)
-
-  tke_z = max(tke_hyb(i, j, k), 1e-6)
+  tke_z = max(tke(i, j, k), 1e-6)
 
   ! Compute BL89 mixing length
-  e1 = -g / pttrefprof(indz) * (pttprof(indz) - pttprof(indzp)) * (hlevel2(i, j, indzp) - hlevel2(i, j, indz))
+  e1 = -g / pttrefprof(k) * (pttprof(k) - pttprof(k+1)) * (hlevel2(i, j, k+1) - hlevel2(i, j, k))
   if (e1 >= tke_z) then
-    yl = hlevel2(i, j, indzp) - hlevel2(i, j, indz)
+    yl = hlevel2(i, j, k+1) - hlevel2(i, j, k)
   else
     ! Upward
     sum = 0.0
-    kp = indzp
+    kp = k+1
     do while (kp < nk)
-      sum = sum - (g / pttrefprof(kp) * (pttprof(indz) - pttprof(kp)) * (hlevel2(i, j, kp) - hlevel2(i, j, kp-1)))
+      sum = sum - (g / pttrefprof(kp) * (pttprof(k) - pttprof(kp)) * (hlevel2(i, j, kp) - hlevel2(i, j, kp-1)))
       if (sum >= tke_z) exit
       kp = kp + 1
     end do
-    yl_up = hlevel2(i, j, kp) - hlevel2(i, j, indz)
+    yl_up = hlevel2(i, j, kp) - hlevel2(i, j, k)
     ! Downward
     sum = 0.0
-    kp = indz
+    kp = k
     do while (kp > 2)
-      sum = sum - (g / pttrefprof(kp) * (pttprof(kp) - pttprof(indzp)) * (hlevel2(i, j, kp+1) - hlevel2(i, j, kp)))
+      sum = sum - (g / pttrefprof(kp) * (pttprof(kp) - pttprof(k+1)) * (hlevel2(i, j, kp+1) - hlevel2(i, j, kp)))
       if (sum >= tke_z) exit
       kp = kp - 1
     end do
-    yl_down = hlevel2(i, j, indzp) - hlevel2(i, j, kp)
+    yl_down = hlevel2(i, j, k+1) - hlevel2(i, j, kp)
     yl = ((yl_up**(-2.0/3.0) + yl_down**(-2.0/3.0))/2.0)**(-3.0/2.0)
   end if
 
   ! Calculate Anisotropy fractions
-  fu2 = max(0.,1.-(yl/5./sqrt(tke_z)*dudxprof(indz)))/3.
-  fv2 = max(0.,1.-(yl/5./sqrt(tke_z)*dvdyprof(indz)))/3.
-  fw2 = max(0.,(1.-yl/5./sqrt(tke_z)*dwdzprof(indz)))/3.
+  fu2 = max(0.,1.-(yl/5./sqrt(tke_z)*dudxprof(k)))/3.
+  fv2 = max(0.,1.-(yl/5./sqrt(tke_z)*dvdyprof(k)))/3.
+  fw2 = max(0.,(1.-yl/5./sqrt(tke_z)*dwdzprof(k)))/3.
 
   ! Variances
   sigu = sqrt(2.0 * tke_z * fu2)
@@ -1029,7 +1017,7 @@ subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
 end subroutine calc_turb_params_tke
 
 subroutine diffusion_fields
-  use snapfldML, only: ps_io, t2m, hbl_io, surface_stress, hflux, tv, obukhov_l_io, u_star_io, w_star_io
+  use snapfldML, only: ps_io, t2m, hbl_io, surface_stress, hflux, tv, obukhov_l_io, u_star_io, w_star_io, tv
   use snapdimML, only: nx, ny
   use, intrinsic :: ieee_arithmetic
 
@@ -1039,7 +1027,7 @@ subroutine diffusion_fields
   real :: fhsfc(nx, ny) ! Surface kinematic heat flux 
 
   ! Calculate surface air density
-  rho_a = (ps_io*100) / (t2m * r)
+  rho_a = (ps_io*100) / (tv(:,:,2) * r)
 
   ! Calculate friction velocity
   u_star_io = sqrt(surface_stress/(rho_a))
@@ -1055,7 +1043,7 @@ subroutine diffusion_fields
   endif
 
   ! Calculate the convective velocity scale
-  w_star_io = ((g/tv(:,:,2))*hbl_io*fhsfc)**0.333
+  w_star_io = ((g/tv(:,:,2))*hbl_io*fhsfc)**(1.0/3.0)
 
   where (ieee_is_nan(w_star_io))
     w_star_io = 0.0
@@ -1088,7 +1076,6 @@ subroutine air_density
       do k = 1, nk
         pressures(i,j,k) = alevel(k) * 100 + blevel(k) * ps_io(i,j) * 100.0
       end do
-      pressures(i,j,2) = ps_io(i,j) * 100.0
     end do
   end do
 
@@ -1117,7 +1104,7 @@ subroutine air_density
   do j = 1, ny
     do i = 1, nx
       rhograd_io(i,j,2) = (rho_io(i,j,3) - rho_io(i,j,2)) &
-                       / (hlevel_io(i,j,3) - rhograd_io(i,j,2))
+                       / (hlevel_io(i,j,3) - hlevel_io(i,j,2))
     end do
   end do
 
@@ -1254,94 +1241,6 @@ subroutine metres_to_eta(part, pextra)
   part%z = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
 
 end subroutine metres_to_eta
-
-subroutine interp_tke_profile_to_hybrid(p_tke, logp_tke, tke_prof, ntke, &
-                                        p_prof, tke_hyb_prof, nlev)
-  implicit none
-  integer, intent(in) :: ntke, nlev
-  real(kind=8), intent(in)  :: p_tke(ntke), logp_tke(ntke)
-  real(kind=8), intent(in)  :: tke_prof(ntke) ! TKE on fixed p-levels
-  real(kind=8), intent(in)  :: p_prof(nlev) ! pressures at model levels
-  real(kind=8), intent(out) :: tke_hyb_prof(nlev) ! TKE at model levels
-
-  integer :: k, k1, k2
-  real(kind=8) :: logp_h, w
-  real(kind=8) :: pmin, pmax
-
-  pmin = p_tke(1)
-  pmax = p_tke(ntke)
-
-  do k = 1, nlev
-     logp_h = log(p_prof(k))
-
-     ! Clip outside TKE pressure range
-     if (p_prof(k) <= pmin) then
-        tke_hyb_prof(k) = tke_prof(1)
-     else if (p_prof(k) >= pmax) then
-        tke_hyb_prof(k) = tke_prof(ntke)
-     else
-        ! Find bracketing TKE levels in log-pressure space
-        do k1 = 1, ntke-1
-          if (logp_tke(k1) <= logp_h .and. logp_tke(k1+1) >= logp_h) then
-              k2 = k1 + 1
-              exit
-          end if
-        end do
-
-        ! Linear interpolation in log-pressure
-        w = (logp_h - logp_tke(k1)) / (logp_tke(k2) - logp_tke(k1))
-        tke_hyb_prof(k) = (1.d0 - w) * tke_prof(k1) + w * tke_prof(k2)
-     end if
-  end do
-
-end subroutine interp_tke_profile_to_hybrid
-
-subroutine interp_tke_to_hybrid_field
-  use snapdimML, only: nx, ny, nk
-  use snapfldML, only: tke, pressures, tke_hyb
-  implicit none
-
-  integer, parameter :: ntke = 17
-
-  ! TKE fixed pressure levels in hPa
-  real(kind=8), dimension(ntke), parameter :: p_tke_hpa = &
-       (/ 200.d0, 250.d0, 300.d0, 400.d0, 500.d0, 600.d0, &
-          700.d0, 750.d0, 800.d0, 825.d0, 850.d0, 875.d0, &
-          900.d0, 925.d0, 950.d0, 975.d0, 1000.d0 /)
-
-  real(kind=8), dimension(ntke), parameter :: p_tke_pa  = p_tke_hpa * 100.d0
-  real(kind=8), dimension(ntke), parameter :: logp_tke  = log(p_tke_pa)
-
-  integer :: i, j, k
-  real(kind=8), dimension(ntke) :: tke_prof
-  real(kind=8), dimension(nk)   :: p_prof, tke_hyb_prof
-
-  do j = 1, ny
-    do i = 1, nx
-
-      ! Extract TKE profile at this (i,j) over fixed pressure levels
-      do k = 1, ntke
-        tke_prof(k) = tke(i,j,k)
-      end do
-
-      ! Strange values of TKE at TOA, set to zero
-      tke_prof(1) = 0.0
-      tke_prof(2) = 0.0
-
-      ! Extract pressure profile at this (i,j) on model levels
-      p_prof(:) = pressures(i,j,:)   ! Pa
-
-      ! Interpolate this column
-      call interp_tke_profile_to_hybrid(p_tke_pa, logp_tke, tke_prof, ntke, &
-                                        p_prof, tke_hyb_prof, nk)
-
-      ! Store result
-      tke_hyb(i,j,:) = tke_hyb_prof(:)
-
-    end do
-  end do
-
-end subroutine interp_tke_to_hybrid_field
 
 subroutine set_turbulence_timestep(part, dt_remaining, adaptive)
   use particleML, only: Particle

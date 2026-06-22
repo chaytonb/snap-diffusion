@@ -20,7 +20,7 @@ module allocateFieldsML
       aircraft_doserate_threshold_height, vd_dep, vd_dep_x, vd_dep_io, &
       surface_stress, hflux, t2m, z0, &
       ustar, raero, my, nu, &
-      total_activity_released, total_activity_lost_domain, total_activity_lost_other, tke_hyb, &
+      total_activity_released, total_activity_lost_domain, total_activity_lost_other, &
       cloud_cover, use_async_io, &
       precip3d_x, precip3d_io, cloud_cover_io, cloud_cover_x, cw3d_x, cw3d_io, spec_humid, obukhov_l1, obukhov_l2, obukhov_l3, &   
       obukhov_l_io, u_star1, u_star2, u_star3, u_star_io, w_star1, w_star2, w_star3, w_star_io, pressures, rel_humid, & 
@@ -117,11 +117,9 @@ subroutine allocateFields
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( spec_humid(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( tke(nx,ny,17), STAT = AllocateStatus)
+  ALLOCATE ( tke(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( hinterf(nx,ny,nk), STAT = AllocateStatus)
-  IF (AllocateStatus /= 0) ERROR STOP errmsg
-  ALLOCATE ( tke_hyb(nx,ny,nk), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( w_star1(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg

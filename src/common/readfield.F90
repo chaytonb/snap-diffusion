@@ -49,9 +49,10 @@ module readfieldML
     USE snapdebug, only: iulog, idebug
     USE snapgrdML, only: gparam, igtype
     USE forwrdML, only: w_eta_to_m
+    USE snapfldML, only: tke
     USE rwalkML, only: bl_definition, air_density, diffusion_fields, turbulence_fields_required, &
-                       diffusion_in_metres
-
+                       diffusion_in_metres, diffusion_scheme
+    USE, intrinsic :: ieee_arithmetic, only: ieee_is_nan
     USE iso_fortran_env, only: error_unit
 !> file type (netcdf or fimex)
     character(len=*), intent(in) :: ftype
@@ -92,6 +93,14 @@ module readfieldML
     if (turbulence_fields_required) then
       call air_density 
       call diffusion_fields
+    endif
+
+    ! Clean TKE values
+    if (diffusion_scheme == 'TKE') then
+      tke(:, :, 1) = tke(:, :, 2)
+      where (ieee_is_nan(tke))
+        tke = 0.0
+      end where
     endif
 
     ! If diffusion scheme operates in metre space, convert vertical velocity to m/s

@@ -62,14 +62,14 @@ contains
                          gparam, klevel, ivlevel, imslp, igtype, ivlayer, ivcoor
     USE snapmetML, only: met_params, xy_wind_units, pressure_units, omega_units, &
                          sigmadot_units, temp_units, requires_precip_deaccumulation, &
-                         downward_momentum_flux_units, &
+                         downward_momentum_flux_units, tke_units, &
                          mass_fraction_units,surface_roughness_length_units, &
                          accum_surface_heat_flux_units, accum_downward_momentum_flux_units
     USE snapdimML, only: nx, ny, nk, output_resolution_factor, hres_field, surface_index
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
-    USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme, interp_tke_to_hybrid_field, &
+    USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme, &
                        turbulence_fields_required
     USE forwrdML, only: w_eta_to_m
     USE compheightML, only: compheight
@@ -218,6 +218,10 @@ contains
       !.. Read in specific humidity data for calculation of air density (for density correction term in langevin eq)
       if (diffusion_scheme=='TKE' .OR. diffusion_scheme=='random_walk_flexpart') then
         call fi_checkload(fio, met_params%spec_humid, mass_fraction_units, spec_humid(:, :, k), nt=timepos, nz=ilevel, nr=nr)
+        ! Read in TKE
+        if (diffusion_scheme=='TKE') then
+          call fi_checkload(fio, met_params%tke, tke_units, tke(:, :, k), nt=timepos, nz=ilevel, nr=nr)
+        endif
       endif
 
       !   TODO read ptop from file (only needed for sigma), but not in emep data
@@ -341,11 +345,6 @@ contains
 
     endif
 
-    ! Read in TKE
-    if (diffusion_scheme=='TKE') then
-      call fi_checkload(fio, met_params%tke, '', tke(:, :, :), nt=timepos, nr=nr)
-    endif
-
     if (first_time_read) then
       call compute_vertical_coords(alev, blev, ptop)
     endif
@@ -414,10 +413,6 @@ contains
     
     if (bl_definition == 'get_bl_from_meteo') then
       call convert_hbl_to_vbl(hbl_io, bl_io)
-    endif
-
-    if (diffusion_scheme == 'TKE') then
-        call interp_tke_to_hybrid_field
     endif
 
     if (met_params%sigmadot_is_omega) then
