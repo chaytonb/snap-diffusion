@@ -802,7 +802,7 @@ end subroutine fixed_k_above_bl
 
 subroutine tke_diffusion(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: hlevel2
+  USE snapfldML, only: hlevel2, hinterf
   USE snapdimML, only: nk
 
   type(Particle), intent(inout)  :: part
@@ -821,11 +821,14 @@ subroutine tke_diffusion(part, pextra, dt_remaining, adaptive)
 
   i = part%x
   j = part%y
+
   ! Identify model layer of particle
   do k = 1, nk-1
-    if (part%zmetres <= hlevel2(i, j, k+1)) exit
+    if (part%zmetres <= hinterf(i, j, k)) exit
   end do
   part_z = part%zmetres
+
+  ! write(*,*) part%zmetres, k
 
   call calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu, tlv, tlw)
 
@@ -883,12 +886,8 @@ subroutine vertical_reflection_step(i, j, k, part_z, tlu, tlv, tlw, sigu, sigv, 
   do
     call random_number(rnd)
     ! Calculate layer boundaries
-    z_bot = hinterf(i,j,k)
-    z_top = hinterf(i,j,k+1)
-
-    ! Temp fix, ivlevel (eta) indexing doesn't exactly line up with hlevel (m)
-    part_z = max(z_bot, part_z)
-    part_z = min(z_top, part_z)
+    z_bot = hinterf(i,j,k-1)
+    z_top = hinterf(i,j,k)
 
     ! Calculate time scale and adjust displacement
     ts = delz / (part_turbvelw * sigw)
@@ -961,7 +960,7 @@ subroutine calc_turb_params_tke(i, j, k, sigu, sigv, sigw, tlu , tlv, tlw)
   USE snapdimML, only: nk
 
   integer, intent(in) :: i, j, k
-  real, intent(inout) :: tlu, tlv, tlw, sigu, sigv, sigw
+  real, intent(out) :: tlu, tlv, tlw, sigu, sigv, sigw
 
   integer :: kp, part_vert_index
   real :: tke_z, yl, yl_up, yl_down, sum, e1

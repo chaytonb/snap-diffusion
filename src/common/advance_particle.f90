@@ -27,7 +27,6 @@ subroutine advance_particle_position(part, pextra, tnow, tstep, rt1, rt2, tf1, t
 
 end subroutine advance_particle_position
 
-
 subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
 
   USE particleML, only: extraParticle, Particle
