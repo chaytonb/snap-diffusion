@@ -262,25 +262,23 @@ subroutine vert_interpol_rho_only(part, pextra, rt1, rt2)
 
 end subroutine vert_interpol_rho_only
 
-subroutine calculate_gradient_profiles(part, pextra, rt1, rt2)
+subroutine calculate_gradient_profiles(part, rt1, rt2)
 
   ! Creates gradient profiles used for partitioning TKE in 3D
 
-  USE particleML, only: Particle, extraParticle
-  USE snapfldML, only: u1, u2, v1, v2, w1, w2, t1, t2, ps1, ps2, w_z1, w_z2, &
+  USE particleML, only: Particle
+  USE snapfldML, only: u1, u2, v1, v2, w1, w2, t1, t2, &
                        dudxprof, dvdyprof, dwdzprof, pttprof, hlevel2, xm, ym, pttrefprof
   use snapdimML, only: nk
 
   type(Particle), intent(in) :: part
-  type(extraParticle), intent(inout) :: pextra
 
   real, intent(in) :: rt1
   real, intent(in) :: rt2
 
   integer :: i,j,k
   real :: dx,dy,c1,c2,c3,c4
-  real :: dz1,dz2,ut1,ut2,vt1,vt2,wt1,wt2,w
-  real :: th,tt1,tt2,ps,p,pi,t,gravity
+  real :: tt1,tt2
   real :: u_left, u_right, v_bottom, v_top
   real :: w_k, w_kp1, z_k, z_kp1
 

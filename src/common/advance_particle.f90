@@ -55,10 +55,10 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   ! Calculate advective velocities
   if (.not. well_mixed_test) call forwrd(tf1, tf2, tnow, tstep, part, pextra)
 
-  if (diffusion_scheme == 'TKE') call calculate_gradient_profiles(part, pextra, rt1, rt2)
+  if (diffusion_scheme == 'TKE') call calculate_gradient_profiles(part, rt1, rt2)
 
   ! Apply adaptive timesteps in the ABL
-  if (part%zmetres < part%hbl .OR. diffusion_scheme == 'TKE') then
+  if (part%zmetres < part%hbl .OR. diffusion_scheme == 'TKE' .OR. diffusion_scheme == 'random_walk_name') then
     do while (t_local < tstep)
 
       i = part%x
@@ -98,7 +98,7 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
       t_local = t_local + part%ptstep
 
       ! ABL top exit condition, complete step above ABL
-      if (part%zmetres > part%hbl .and. diffusion_scheme /= 'TKE') exit
+      if (part%zmetres > part%hbl .and. diffusion_scheme /= 'TKE' .and. diffusion_scheme /= 'random_walk_name') exit
 
     end do
   endif

@@ -66,7 +66,7 @@ subroutine compheight()
       ! First interface (surface)
       hinterf(i, j, 1) = 0.0
       ! Remaining interfaces
-      do k = 2, nk+1
+      do k = 2, nk
         hinterf(i, j, k) = hinterf(i, j, k-1) + hlayer(i, j, k-1)
       end do
     end do

@@ -169,7 +169,7 @@ PROGRAM bsnap
   USE snapfilML, only: filef, itimer, ncsummary, nctitle, nhfmax, nhfmin, &
                        nctype, nfilef, simulation_start, spinup_steps
   USE snapfldML, only: nhfout, enspos, use_async_io, total_activity_lost_domain, &
-                       swap_fields_before_reading, swap_fields_after_reading, tke
+                       swap_fields_before_reading, swap_fields_after_reading
   USE snapmetML, only: init_meteo_params, met_params
   USE snapparML, only: component, run_comp, output_component, &
                        ncomp, nocomp, def_comp, nparnum, &
@@ -827,12 +827,12 @@ PROGRAM bsnap
           !..wet deposition
           call wetdep(tstep, pdata(np), pextra)
 
-          if (diffusion_in_metres) call eta_to_metres(pdata(np), pextra)
+          if (diffusion_in_metres) call eta_to_metres(pdata(np))
           
           !..apply the advection and diffusion to particle
           call advance_particle_position(pdata(np), pextra, tnow, tstep, rt1, rt2, tf1, tf2, adaptive_timesteps)
 
-          if (diffusion_in_metres) call metres_to_eta(pdata(np), pextra)
+          if (diffusion_in_metres) call metres_to_eta(pdata(np))
 
           call check_in_domain(pdata(np), out_of_domain)
           if (out_of_domain) then
