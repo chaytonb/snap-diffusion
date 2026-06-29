@@ -49,6 +49,7 @@ module rwalkML
   logical, save, public :: blfullmix = .FALSE.
   logical, save, public :: diffusion_in_metres = .FALSE.
   logical, save, public :: turbulence_fields_required = .FALSE.
+  logical, save, public :: density_correction = .FALSE.
   character(len=64), save, public :: diffusion_scheme = ''
   character(len=64), save, public :: bl_definition = ''
   character(len=64), save, public :: meteo_type = ''
@@ -431,8 +432,9 @@ subroutine random_walk_name(part, pextra, dt_remaining, adaptive)
   real :: eps, c
   real :: dttlu, dttlv, dttlw
   real :: dsigwdz
-  real :: rw
+  real :: ru, rv, rw
   real :: sigw2
+  real :: density_corr
 
   ! Dimensionless height
   if (turb_homogeneous) then ! Take middle BL value if homogeneous
@@ -445,6 +447,12 @@ subroutine random_walk_name(part, pextra, dt_remaining, adaptive)
   c = 2.0 ! constant, values for this disagree. 3 from Sawford
   wst = pextra%wst
   ust = pextra%ust
+
+  if (density_correction) then
+    density_corr = pextra%rhograd/pextra%rho
+  else
+    density_corr = 0
+  endif
 
   if (well_mixed_test) then
     wst = 1.5
@@ -524,8 +532,6 @@ subroutine random_walk_name(part, pextra, dt_remaining, adaptive)
 
   if (turb_homogeneous) dsigwdz=0
 
-  write(*,*) 'test'
-
   ! Clamp lagrangian timescales
   tlu=max(10.,tlu)
   tlv=max(10.,tlv)
@@ -541,20 +547,36 @@ subroutine random_walk_name(part, pextra, dt_remaining, adaptive)
   dttlu = part%ptstep/tlu
   dttlv = part%ptstep/tlv
 
-  ! Calculate Turbulent Velocities, Ryall and Maryon 1998
+  ! Calculate turbulent horizontal velocities
   if (nrand+1.gt.max_rands) nrand=1
-    part%turbvelu = part%turbvelu*(1-(dttlu)) + (2*sigu**2 * dttlu)**0.5*rands(nrand)
-    part%turbvelv = part%turbvelv*(1-(dttlv)) + (2*sigv**2 * dttlv)**0.5*rands(nrand+1)
-  nrand=nrand+2
+  if (dttlu.lt.0.5) then
+    part%turbvelu = (1.0-dttlu) * part%turbvelu + rands(nrand) * sigu * sqrt(2.0*dttlu)
+  else
+    ru = exp(-dttlu)
+    part%turbvelu = ru * part%turbvelu + rands(nrand) * sigu * sqrt(1.0-ru**2)
+  endif
 
-  ! ratio of time step to lagrangian timescale for autocorrelation
+  if (dttlv.lt.0.5) then
+    part%turbvelv = (1.0-dttlv) * part%turbvelv + rands(nrand+1) * sigv * sqrt(2.0*dttlv)
+  else
+    rv = exp(-dttlv)
+    part%turbvelv = rv * part%turbvelv + rands(nrand+1) * sigv * sqrt(1.0-rv**2)
+  endif
+  nrand = nrand + 2
+
   dttlw = part%ptstep/tlw
-  rw = exp(-dttlw)
 
   if (nrand.gt.max_rands) nrand=1
   ! Calculate turbulent vertical velocity
-  part%turbvelw=rw*part%turbvelw + tlw*(1.-rw)*dsigwdz + sqrt(1.0-rw**2) * rands(nrand)
-  nrand=nrand+1
+  if (dttlw.lt.0.5) then
+    part%turbvelw = (1.0-dttlw)*part%turbvelw + part%ptstep*(dsigwdz+density_corr*sigw) &
+                    + sqrt(2.0*dttlw)*rands(nrand)
+  else
+    rw = exp(-dttlw)
+    part%turbvelw = rw*part%turbvelw + tlw*(1.0-rw)*(dsigwdz+density_corr*sigw) &
+                    + sqrt(1.0-rw**2)*rands(nrand)
+  endif
+  nrand = nrand + 1
 
   ! Calculate new vertical position
   delz=part%turbvelw*sigw*part%ptstep

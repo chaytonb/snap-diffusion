@@ -70,7 +70,7 @@ contains
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
     USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme, &
-                       turbulence_fields_required
+                       turbulence_fields_required, density_correction
     USE forwrdML, only: w_eta_to_m
     USE compheightML, only: compheight
 !> current timestep (always positive), negative istep means reset
@@ -216,12 +216,13 @@ contains
       call fi_checkload(fio, met_params%pottempv, temp_units, t_io(:, :, k), nt=timepos, nz=ilevel, nr=nr)
 
       !.. Read in specific humidity data for calculation of air density (for density correction term in langevin eq)
-      if (diffusion_scheme=='TKE' .OR. diffusion_scheme=='random_walk_flexpart') then
+      if (density_correction) then
         call fi_checkload(fio, met_params%spec_humid, mass_fraction_units, spec_humid(:, :, k), nt=timepos, nz=ilevel, nr=nr)
-        ! Read in TKE
-        if (diffusion_scheme=='TKE') then
-          call fi_checkload(fio, met_params%tke, tke_units, tke(:, :, k), nt=timepos, nz=ilevel, nr=nr)
-        endif
+      endif
+
+      ! Read in TKE
+      if (diffusion_scheme=='TKE') then
+        call fi_checkload(fio, met_params%tke, tke_units, tke(:, :, k), nt=timepos, nz=ilevel, nr=nr)
       endif
 
       !   TODO read ptop from file (only needed for sigma), but not in emep data

@@ -1012,7 +1012,7 @@ contains
     use snapparML, only: GRAV_TYPE_UNDEFINED, GRAV_TYPE_OFF, GRAV_TYPE_FIXED
     use rwalkML, only: diffusion_b => b, diffusion_a_in_bl => a_in_bl, diffusion_a_above_bl => a_above_bl, &
                        bl_definition, diffusion_scheme, entrainment_scheme, turb_homogeneous, &
-                       well_mixed_test
+                       well_mixed_test, density_correction
 
     !> Open file unit
     integer, intent(in) :: snapinput_unit
@@ -1212,6 +1212,12 @@ contains
       case ('turb.homogeneous.on')
         !..homogeneous turbulence
         turb_homogeneous = .TRUE.
+      case ('density.correction.off')
+        !..inhomogeneous turbulence
+        density_correction = .FALSE.
+      case ('density.correction.on')
+        !..homogeneous turbulence
+        density_correction = .TRUE.
       case ('adaptive.timesteps.on')
         adaptive_timesteps = .TRUE.
       case ('adaptive.timesteps.off')

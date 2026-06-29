@@ -267,7 +267,7 @@ subroutine calculate_gradient_profiles(part, rt1, rt2)
   ! Creates gradient profiles used for partitioning TKE in 3D
 
   USE particleML, only: Particle
-  USE snapfldML, only: u1, u2, v1, v2, w1, w2, t1, t2, &
+  USE snapfldML, only: u1, u2, v1, v2, w_z1, w_z2, t1, t2, &
                        dudxprof, dvdyprof, dwdzprof, pttprof, hlevel2, xm, ym, pttrefprof
   use snapdimML, only: nk
 
@@ -316,16 +316,19 @@ subroutine calculate_gradient_profiles(part, rt1, rt2)
 
     ! Vertical Gradient 
     if (k < nk) then
-        w_k = interp(w1(i,j,k), w1(i+1,j,k), w1(i,j+1,k), w1(i+1,j+1,k), c1, c2, c3, c4)
-        w_kp1 = interp(w1(i,j,k+1), w1(i+1,j,k+1), w1(i,j+1,k+1), w1(i+1,j+1,k+1), c1, c2, c3, c4)
-        
-        ! Map heights across layers 
-        z_k = interp(hlevel2(i,j,k), hlevel2(i+1,j,k), hlevel2(i,j+1,k), hlevel2(i+1,j+1,k), c1, c2, c3, c4)
-        z_kp1 = interp(hlevel2(i,j,k+1), hlevel2(i+1,j,k+1), hlevel2(i,j+1,k+1), hlevel2(i+1,j+1,k+1), c1, c2, c3, c4)
-        
-        dwdzprof(k) = (w_kp1 - w_k) / max((z_kp1 - z_k), 1.0)
+      w_k = rt1 * interp(w_z1(i,j,k), w_z1(i+1,j,k), w_z1(i,j+1,k), w_z1(i+1,j+1,k), c1, c2, c3, c4) + &
+            rt2 * interp(w_z2(i,j,k), w_z2(i+1,j,k), w_z2(i,j+1,k), w_z2(i+1,j+1,k), c1, c2, c3, c4)
+
+      w_kp1 = rt1 * interp(w_z1(i,j,k+1), w_z1(i+1,j,k+1), w_z1(i,j+1,k+1), w_z1(i+1,j+1,k+1), c1, c2, c3, c4) + &
+              rt2 * interp(w_z2(i,j,k+1), w_z2(i+1,j,k+1), w_z2(i,j+1,k+1), w_z2(i+1,j+1,k+1), c1, c2, c3, c4)
+      
+      ! Map heights across layers 
+      z_k = interp(hlevel2(i,j,k), hlevel2(i+1,j,k), hlevel2(i,j+1,k), hlevel2(i+1,j+1,k), c1, c2, c3, c4)
+      z_kp1 = interp(hlevel2(i,j,k+1), hlevel2(i+1,j,k+1), hlevel2(i,j+1,k+1), hlevel2(i+1,j+1,k+1), c1, c2, c3, c4)
+      
+      dwdzprof(k) = (w_kp1 - w_k) / max((z_kp1 - z_k), 1.0)
     else
-        dwdzprof(k) = 0.0
+      dwdzprof(k) = 0.0
     end if
   end do
   
