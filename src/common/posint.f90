@@ -88,7 +88,6 @@ subroutine posint(part,rt1,rt2,pextra)
     pextra%ol=ol
     pextra%wst=wst
     pextra%ust=ust
-
   endif
 
   !..map ratio
@@ -104,7 +103,6 @@ subroutine posint(part,rt1,rt2,pextra)
   pextra%rmx=rmx/dxgrid
   pextra%rmy=rmy/dygrid
   pextra%prc=pr
-
 
 end subroutine posint
 

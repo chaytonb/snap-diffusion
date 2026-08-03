@@ -188,7 +188,8 @@ PROGRAM bsnap
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
   USE rwalkML, only: rwalk_init, diffusion_scheme, blfullmix, eta_to_metres, metres_to_eta, turbulence_fields_required, &
-                     diffusion_in_metres
+                     diffusion_in_metres, density_correction, scheme_is_tke, scheme_is_random_walk, diffusion_scheme_id, &
+                     scheme_uses_adaptive_above_bl, bl_definition, bl_id
   USE advance_particleML, only: advance_particle_position
   USE milibML, only: xyconvert, GEO_PARAMS
   USE forwrdML, only: forwrd
@@ -265,6 +266,15 @@ PROGRAM bsnap
   real ::    rt1
   !> fractions to next timestep
   real :: rt2
+
+  ! Turbulence Scheme IDs
+  integer, parameter :: DIFF_SNAP               = 1
+  integer, parameter :: DIFF_RANDOM_WALK_FLEX   = 2
+  integer, parameter :: DIFF_RANDOM_WALK_NAME   = 3
+  integer, parameter :: DIFF_FIXED_K            = 4
+  integer, parameter :: DIFF_VARIABLE_K         = 5
+  integer, parameter :: DIFF_TKE                = 6
+  integer, parameter :: DIFF_HYBRID             = 7
 
   real :: x(1), y(1)
   type(extraParticle) :: pextra
@@ -384,13 +394,59 @@ PROGRAM bsnap
   call initialize_gaussian_smoothing(kernel_size_in=gaussian_smoothing_kernel_size, &
                                      max_age_hr_in=gaussian_smoothing_max_age_hr)
 
-! Check diffusion scheme before reading
-  if (diffusion_scheme == 'variable_k' .OR. diffusion_scheme == 'random_walk_flexpart'  &
-        .OR. diffusion_scheme == 'random_walk_name' .OR. diffusion_scheme == 'TKE') then
-    turbulence_fields_required = .TRUE.
-  endif
+  ! Set up flags for turbulence schemes
+  select case (trim(diffusion_scheme))
 
-  if (diffusion_scheme /= '') diffusion_in_metres = .TRUE.
+  case ('')
+    diffusion_scheme_id = DIFF_SNAP
+
+  case ('fixed_k')
+    diffusion_scheme_id = DIFF_FIXED_K
+    diffusion_in_metres = .true.
+    turbulence_fields_required = .false.
+
+  case ('variable_k')
+    diffusion_scheme_id = DIFF_VARIABLE_K
+    diffusion_in_metres = .true.
+    turbulence_fields_required = .true.
+
+  case ('random_walk_flexpart')
+    diffusion_scheme_id = DIFF_RANDOM_WALK_FLEX
+    diffusion_in_metres = .true.
+    turbulence_fields_required = .true.
+    scheme_is_random_walk = .true.
+
+  case ('random_walk_name')
+    diffusion_scheme_id = DIFF_RANDOM_WALK_NAME
+    diffusion_in_metres = .true.
+    turbulence_fields_required = .true.
+    scheme_is_random_walk = .true.
+    scheme_uses_adaptive_above_bl = .true.
+
+  case ('TKE')
+    diffusion_scheme_id = DIFF_TKE
+    diffusion_in_metres = .true.
+    turbulence_fields_required = .true.
+    scheme_is_tke = .true.
+    scheme_uses_adaptive_above_bl = .true.
+
+  case ('hybrid')
+    diffusion_scheme_id = DIFF_HYBRID
+    diffusion_in_metres = .true.
+    turbulence_fields_required = .true.
+    scheme_uses_adaptive_above_bl = .true.
+
+  case default
+    write(*,*) 'ERROR: unknown diffusion_scheme = ', trim(diffusion_scheme)
+    stop 1
+  end select
+
+  ! Set up boundary layer flag
+  if (bl_definition == 'constant') then
+    bl_id = 1
+  elseif (bl_definition == 'get_bl_from_meteo') then
+    bl_id = 2
+  endif
 
 !..check input FELT files and make sorted lists of available data
 !..make main list based on x wind comp. (u) in upper used level
@@ -794,9 +850,6 @@ PROGRAM bsnap
         iplume(npl)%ageInSteps = iplume(npl)%ageInSteps + 1
       end do
 
-      ! Check if diffusion scheme requires eta to metres conversion
-      if (diffusion_scheme /= '') diffusion_in_metres = .true.
-
       call particleloop_timer%start()
       ! particle loop
       !$OMP PARALLEL DO &
@@ -826,6 +879,12 @@ PROGRAM bsnap
 
           !..wet deposition
           call wetdep(tstep, pdata(np), pextra)
+
+          if (age_hr > 3 .AND. diffusion_scheme_id == 7) then
+            adaptive_timesteps = .FALSE.
+          elseif (diffusion_scheme_id == 7) then
+            adaptive_timesteps = .TRUE.
+          endif
 
           if (diffusion_in_metres) call eta_to_metres(pdata(np))
           

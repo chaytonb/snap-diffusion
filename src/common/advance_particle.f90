@@ -10,14 +10,14 @@ subroutine advance_particle_position(part, pextra, tnow, tstep, rt1, rt2, tf1, t
 
   USE particleML, only: Particle, extraParticle
   USE bldpML, only: set_constant_bl
-  USE rwalkML, only: bl_definition
+  USE rwalkML, only: bl_id
 
   type(Particle), intent(inout)      :: part
   type(extraParticle), intent(inout) :: pextra
   real, intent(in)                   :: tnow, tstep, rt1, rt2, tf1, tf2 ! Time interpolation variables
   logical, intent(in)                :: adaptive
 
-  if (bl_definition == 'constant') call set_constant_bl(part)
+  if (bl_id == 1) call set_constant_bl(part)
 
   if (adaptive) then
      call step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
@@ -32,7 +32,8 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   USE particleML, only: extraParticle, Particle
   USE posintML, only: posint_newlevel, posint_vert, calculate_gradient_profiles
   USE snapfldML, only: hlevel2
-  USE rwalkML, only: diffusion_scheme, turbulence_master, well_mixed_test
+  USE rwalkML, only: turbulence_master, well_mixed_test, scheme_is_tke, &
+                     scheme_uses_adaptive_above_bl
   USE forwrdML, only: forwrd
   USE snapdimML, only: nk
 
@@ -52,17 +53,19 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   t_local = 0.0
   interpol_exists = .false.
 
-  ! Calculate advective velocities
-  if (.not. well_mixed_test) call forwrd(tf1, tf2, tnow, tstep, part, pextra)
+  ! Apply adaptive timesteps in the ABL or if scheme always uses adaptive tsteps
+  if (part%zmetres < part%hbl .OR. scheme_uses_adaptive_above_bl) then
 
-  if (diffusion_scheme == 'TKE') call calculate_gradient_profiles(part, rt1, rt2)
+    ! Calculate advective velocities
+    if (.not. well_mixed_test) call forwrd(tf1, tf2, tnow, tstep, part, pextra)
 
-  ! Apply adaptive timesteps in the ABL
-  if (part%zmetres < part%hbl .OR. diffusion_scheme == 'TKE' .OR. diffusion_scheme == 'random_walk_name') then
+    if (scheme_is_tke) call calculate_gradient_profiles(part, rt1, rt2)
+
+    i = part%x
+    j = part%y
+
     do while (t_local < tstep)
 
-      i = part%x
-      j = part%y
       ! Identify bracketing vertical model levels
       do k0 = 1, nk-1
         if (part%zmetres <= hlevel2(i, j, k0+1)) exit
@@ -98,7 +101,7 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
       t_local = t_local + part%ptstep
 
       ! ABL top exit condition, complete step above ABL
-      if (part%zmetres > part%hbl .and. diffusion_scheme /= 'TKE' .and. diffusion_scheme /= 'random_walk_name') exit
+      if (part%zmetres > part%hbl .and. .not.scheme_uses_adaptive_above_bl) exit
 
     end do
   endif
@@ -129,7 +132,7 @@ end subroutine step_adaptive_loop
 subroutine step_standard_single(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
 
   USE forwrdML, only: forwrd
-  USE rwalkML, only: turbulence_master, well_mixed_test, diffusion_scheme, diffusion_in_metres
+  USE rwalkML, only: turbulence_master, well_mixed_test, diffusion_in_metres, density_correction
   USE particleML, only: extraParticle, Particle
   USE posintML, only: vert_interpol_rho_only
 
@@ -145,7 +148,7 @@ subroutine step_standard_single(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   if (.not. well_mixed_test) call forwrd(tf1, tf2, tnow, tstep, part, pextra)
 
   ! Interpolated density values required for Langevin scheme
-  if (diffusion_scheme == 'random_walk_flexpart') call vert_interpol_rho_only(part, pextra, rt1, rt2)
+  if (density_correction) call vert_interpol_rho_only(part, pextra, rt1, rt2)
 
   ! Calculate turbulent velocities and apply vertical turbulent displacement
   call turbulence_master(part, pextra, dt_remaining, .FALSE.)

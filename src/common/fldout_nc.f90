@@ -142,7 +142,7 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, nsteph, &
       concacc, accprec, max_column_concentration, aircraft_doserate, &
       aircraft_doserate_threshold_height, &
       total_activity_released, total_activity_lost_domain, total_activity_lost_other, &
-      vd_dep, precip3d, bl1, bl2
+      vd_dep, precip3d, bl1, bl2, hbl1, hbl2
   USE snapparML, only: output_component, def_comp, nocomp
   USE snapdebug, only: iulog, idebug
   USE ftestML, only: ftest
@@ -245,8 +245,8 @@ subroutine fldout_nc(filename, itime,tf1,tf2,tnow, nsteph, &
   end if
 
 !..instant height of boundary layer
-  !field1(:,:) = rt1*hbl1 + rt2*hbl2
-  field1(:,:) = rt1*bl1 + rt2*bl2
+  field1(:,:) = rt1*hbl1 + rt2*hbl2
+  ! field1(:,:) = rt1*bl1 + rt2*bl2
   if(idebug == 1) call ftest('hbl', field1)
   call hres_field(field1, hbl_hr)
   call check(nf90_put_var(iunit, varid%ihbl, start=ipos, count=isize, &

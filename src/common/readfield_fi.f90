@@ -69,7 +69,7 @@ contains
     USE snaptimers, only: metcalc_timer
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
-    USE rwalkML, only: bl_definition, diffusion_fields, air_density, diffusion_scheme, &
+    USE rwalkML, only: bl_id, diffusion_fields, air_density, scheme_is_tke, &
                        turbulence_fields_required, density_correction
     USE forwrdML, only: w_eta_to_m
     USE compheightML, only: compheight
@@ -221,7 +221,7 @@ contains
       endif
 
       ! Read in TKE
-      if (diffusion_scheme=='TKE') then
+      if (scheme_is_tke) then
         call fi_checkload(fio, met_params%tke, tke_units, tke(:, :, k), nt=timepos, nz=ilevel, nr=nr)
       endif
 
@@ -295,13 +295,13 @@ contains
       endif
     end if
 
-    if (bl_definition == 'get_bl_from_meteo') then
-  !..model boundary layer height
-      call fi_checkload(fio, met_params%blh, surface_roughness_length_units, hbl_io(:, :), nt=timepos, nr=nr)
+    !..read boundary layer height from meteo
+    if (bl_id == 2) then
+      call fi_checkload(fio, met_params%blh, '', hbl_io(:, :), nt=timepos, nr=nr)
     endif
 
-!.. Read in 2m air temperature
-    call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
+    !.. Read in 2m air temperature
+    if (turbulence_fields_required) call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
     ! Only read in extra fields if turbulence scheme requires it
     if (turbulence_fields_required) then
@@ -412,7 +412,7 @@ contains
 
     call compheight
     
-    if (bl_definition == 'get_bl_from_meteo') then
+    if (bl_id == 2) then
       call convert_hbl_to_vbl(hbl_io, bl_io)
     endif
 
@@ -1171,9 +1171,9 @@ contains
 
 
 subroutine convert_hbl_to_vbl(hbl, vbl)
-  use snapfldML, only: ps2, hlevel2
+  use snapfldML, only: hlevel_io
   use snapdimML, only: nx, ny, nk
-  use snapgrdML, only: alevel, blevel
+  use snapgrdML, only: vlevel
 
   real, intent(inout) :: hbl(:, :)
   real, intent(out) :: vbl(:, :)
@@ -1192,8 +1192,8 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
   ! Find the height level corresponding to the one immediately above the boundary layer height
   above_index = nk
   do k = 2, nk
-    associate(height_k => hlevel2(:, :, k))
-    where (hbl > height_k)
+    associate(height_k => hlevel_io(:, :, k))
+    where (hbl < height_k)
       above_index = min(above_index, k)
     endwhere
     end associate
@@ -1202,20 +1202,20 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
   ! Get the index below the boundary layer height
   below_index = above_index - 1
 
-  ! Linearly interpolate between the two indices to get the exact sigma level corresponding to the
+  ! Linearly interpolate between the two indices to get the exact hybrid level corresponding to the
   ! top of the boundary layer
   do i = 1, nx
     do j = 1, ny
 
-      pressure_below = alevel(below_index(i,j)) + blevel(below_index(i,j)) * ps2(i,j)
-      pressure_above = alevel(above_index(i,j)) + blevel(above_index(i,j)) * ps2(i,j)
+      pressure_below = vlevel(below_index(i,j))
+      pressure_above = vlevel(above_index(i,j))
 
-      weight = (hbl(i, j) - hlevel2(i, j, below_index(i, j))) /  &
-      (hlevel2(i, j, above_index(i, j)) - hlevel2(i, j, below_index(i, j)))
+      weight = (hbl(i, j) - hlevel_io(i, j, below_index(i, j))) /  &
+      (hlevel_io(i, j, above_index(i, j)) - hlevel_io(i, j, below_index(i, j)))
 
       bl_top_pressure = pressure_below + weight * (pressure_above - pressure_below)
 
-      vbl(i, j) = bl_top_pressure / ps2(i, j)
+      vbl(i, j) = bl_top_pressure 
 
     end do
   end do

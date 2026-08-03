@@ -50,8 +50,8 @@ module readfieldML
     USE snapgrdML, only: gparam, igtype
     USE forwrdML, only: w_eta_to_m
     USE snapfldML, only: tke
-    USE rwalkML, only: bl_definition, air_density, diffusion_fields, turbulence_fields_required, &
-                       diffusion_in_metres, diffusion_scheme
+    USE rwalkML, only: bl_id, air_density, diffusion_fields, turbulence_fields_required, &
+                       diffusion_in_metres, scheme_is_tke
     USE, intrinsic :: ieee_arithmetic, only: ieee_is_nan
     USE iso_fortran_env, only: error_unit
 !> file type (netcdf or fimex)
@@ -85,7 +85,7 @@ module readfieldML
     call compheight
 
     !..calculate boundary layer (top and height)
-    if (bl_definition /= 'get_bl_from_meteo' .and. bl_definition /= 'constant') then
+    if (bl_id == 0) then
         call bldp
     endif
 
@@ -96,7 +96,7 @@ module readfieldML
     endif
 
     ! Clean TKE values
-    if (diffusion_scheme == 'TKE') then
+    if (scheme_is_tke) then
       tke(:, :, 1) = tke(:, :, 2)
       where (ieee_is_nan(tke))
         tke = 0.0
