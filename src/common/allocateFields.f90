@@ -111,6 +111,8 @@ subroutine allocateFields
   ! Extra fields for atmospheric stability
   ALLOCATE ( hflux(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
+  ALLOCATE ( surface_stress(nx,ny), STAT = AllocateStatus)
+  IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( rel_humid(nx,ny), STAT = AllocateStatus)
   IF (AllocateStatus /= 0) ERROR STOP errmsg
   ALLOCATE ( t2m(nx,ny), STAT = AllocateStatus)

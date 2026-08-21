@@ -45,6 +45,8 @@ module rwalkML
   real(real64), save, public :: a_above_bl = 0.25
   real(real64), save, public :: b = 0.875
   logical, save, public :: turb_homogeneous = .FALSE.
+  logical, save, public :: langevin_switch = .FALSE.
+  logical, save, public :: well_mixed_stable = .FALSE.
   logical, save, public :: well_mixed_test = .FALSE.
   logical, save, public :: blfullmix = .FALSE.
 
@@ -57,6 +59,9 @@ module rwalkML
   logical, save, public :: scheme_uses_adaptive_above_bl   = .FALSE.
   integer, save, public :: diffusion_scheme_id = 0
   integer, save, public :: bl_id = 0
+
+  ! Default value if blh set to constant
+  real, save, public :: constant_bl_height = 600.0 
 
   character(len=64), save, public :: diffusion_scheme = ''
   character(len=64), save, public :: bl_definition = ''
@@ -113,9 +118,9 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
   elseif (diffusion_scheme_id == 5) then
     ! Check if particle within abl
     if (part%zmetres.lt.part%hbl) then
-      call variable_k_inhomog(part, pextra)
+      call variable_k_within_bl(part, pextra)
     else
-      call variable_k_inhomog_above(part, pextra)
+      call variable_k_above_bl(part, pextra)
     endif
   elseif (diffusion_scheme_id == 3) then
     ! BL vs FT handled by minimum values in flexpart function
@@ -123,7 +128,13 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
       call random_walk_name(part, pextra, dt_remaining, adaptive)
     else
       if (part%zmetres.lt.part%hbl) then
-        call random_walk_name_fixed_below2(part, pextra, dt_remaining, adaptive)
+        if (langevin_switch) then
+          ! Alternative Langevin formulation, FLEXPART long time step form
+          call random_walk_name_fixed_below(part, pextra, dt_remaining, adaptive)
+        else
+          ! Standard Langevin formulation
+          call random_walk_name_fixed_below2(part, pextra, dt_remaining, adaptive)
+        endif
       else
         call random_walk_name_fixed_above(part, pextra, dt_remaining, adaptive)
       endif
@@ -435,6 +446,7 @@ subroutine flexpart_diffusion_above_abl(part, pextra, dt_remaining)
 
 end subroutine flexpart_diffusion_above_abl
 
+
 subroutine random_walk_name(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
 
@@ -639,9 +651,14 @@ subroutine random_walk_name_fixed_below(part, pextra, dt_remaining, adaptive)
   kappa = 0.4
 
   if (well_mixed_test) then
-    ol  = -500.0
-    ust = 0.4
-    wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
+    if (well_mixed_stable) then
+      ol = 50
+      ust = 0.2
+    else
+      ol = -100
+      ust = 0.4
+      wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
+    endif
   endif
 
   if (density_correction) then
@@ -702,9 +719,9 @@ subroutine random_walk_name_fixed_below(part, pextra, dt_remaining, adaptive)
   endif
 
   ! Clamp lagrangian timescales
-  tlu=max(10.,tlu)
-  tlv=max(10.,tlv)
-  tlw=max(20.,tlw)
+  ! tlu=max(10.,tlu)
+  ! tlv=max(10.,tlv)
+  ! tlw=max(20.,tlw)
 
   part%tlw = tlw
   part%sigw = sigw
@@ -790,9 +807,14 @@ subroutine random_walk_name_fixed_below2(part, pextra, dt_remaining, adaptive)
   kappa = 0.4
 
   if (well_mixed_test) then
-    ol  = -500.0
-    ust = 0.4
-    wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
+    if (well_mixed_stable) then
+      ol = 50
+      ust = 0.2
+    else
+      ol = -100
+      ust = 0.4
+      wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
+    endif
   endif
 
   if (density_correction) then
@@ -855,9 +877,9 @@ subroutine random_walk_name_fixed_below2(part, pextra, dt_remaining, adaptive)
   endif
 
   ! Clamp lagrangian timescales
-  tlu=max(10.,tlu)
-  tlv=max(10.,tlv)
-  tlw=max(20.,tlw)
+  ! tlu=max(10.,tlu)
+  ! tlv=max(10.,tlv)
+  ! tlw=max(20.,tlw)
 
   part%tlw = tlw
   part%sigw = sigw
@@ -931,127 +953,10 @@ subroutine random_walk_name_fixed_above(part, pextra, dt_remaining, adaptive)
 
 end subroutine random_walk_name_fixed_above
 
-subroutine variable_k_within_bl(part, pextra) 
-  USE particleML, only: extraParticle, Particle
-  
-  !> particle with information
-  type(Particle), intent(inout)  :: part
-  !> extra information regarding the particle
-  type(extraParticle), intent(inout) :: pextra
-
-  real :: kappa ! Von Karmans constant
-  real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
-  real :: tlu, tlv, tlw ! Lagrangian timescales
-  real :: delz ! Turbulent vertical displacement (m)
-  real :: scaled_height
-  real :: wst, ust, ol, h
-  real :: eps, c
-
-  ! Dimensionless height, take middle value for homogeneous profiles
-  scaled_height = 0.5
-
-  kappa = 0.4
-  c = 2 ! constant, values for this disagree. 3 from Sawford
-  wst = pextra%wst
-  ust = pextra%ust
-  ol = pextra%ol
-  h = part%hbl
-
-  if (well_mixed_test) then
-    ol = -100
-    ust = 0.5
-    wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
-  endif
-
-  ! Case 1, Stable Conditions
-  if (ol.gt.0.) then
-    sigu=2.*ust*(1.-scaled_height) !. 7.20, Hanna
-    sigu=max(sigu,0.25)
-    sigv=sigu
-    sigw=1.3*ust*(1.-scaled_height)
-    sigw=max(sigw,0.1)
-
-    ! Lagrangian timescales
-    tlu=0.07*(part%hbl/sigv)*(scaled_height)**0.5 !. 7.22, Hanna
-    tlv=tlu
-    tlw=0.1*part%hbl/sigw*(scaled_height)**0.8
-  
-  ! Case 2 , Unstable Conditions
-  else
-    sigu = (0.4*wst**2 + (5 - 4*scaled_height)*ust**2)**0.5
-    sigu=max(sigu,0.25)
-    sigv = sigu
-    sigw = (1.2 * wst**2  *(1-0.9*scaled_height)*(scaled_height)**0.666 + (1.8 - 1.4*scaled_height)*ust**2)**0.5
-    sigw=max(sigw,0.1) 
-
-    eps = (1.5 - 1.2 * (scaled_height)**0.333)*(wst**3/part%hbl) + (ust**3 * (1-0.8*scaled_height)/(kappa*(part%hbl*0.5)))
-
-    tlu = 2*sigu**2 / (c*eps)
-    tlv = tlu
-    tlw = 2*sigw**2 / (c*eps)
-  endif
-
-  ! Clamp lagrangian timescales
-  tlu=max(10.,tlu)
-  tlv=max(10.,tlv)
-  tlw=max(30.,tlw)
-
-  ! Calculate Turbulent Velocities, Ryall and Maryon 1998
-  if (nrand+2.gt.max_rands) nrand=1
-  part%turbvelu = ((2*(sigu**2 * tlu))/tstep)**0.5 * rands(nrand)
-  part%turbvelv = ((2*(sigv**2 * tlv))/tstep)**0.5 * rands(nrand+1)
-  part%turbvelw = ((2*(sigw**2 * tlw))/tstep)**0.5 * rands(nrand+2)
-  nrand=nrand+3
-
-  delz=part%turbvelw*tstep 
-
-  part%zmetres = part%zmetres + delz
-  do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
-    if (part%zmetres < 0.0) part%zmetres = -part%zmetres
-    if (part%zmetres > part%hbl) part%zmetres = 2.0*part%hbl - part%zmetres
-  end do
-
-end subroutine variable_k_within_bl
-
-subroutine variable_k_above_bl(part, pextra) 
-  USE particleML, only: extraParticle, Particle
-  
-  !> particle with information
-  type(Particle), intent(inout)  :: part
-  !> extra information regarding the particle
-  type(extraParticle), intent(inout) :: pextra
-
-  real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
-  real :: tlu, tlv, tlw ! Lagrangian timescales
-  real :: delz ! Turbulent vertical displacement (m)
-
-  sigu = 0.25
-  sigv = sigu
-  sigw = 0.1
-  tlu = 300
-  tlv = tlu
-  tlw = 100
-
-  if (nrand+2.gt.max_rands) nrand=1
-  part%turbvelu = ((2*(sigu**2 * tlu))/tstep)**0.5 * rands(nrand)
-  part%turbvelv = ((2*(sigv**2 * tlv))/tstep)**0.5 * rands(nrand+1)
-  part%turbvelw = ((2*(sigw**2 * tlw))/tstep)**0.5 * rands(nrand+2)
-  nrand=nrand+3
-
-  ! Calculate new vertical position
-  delz=part%turbvelw*tstep 
-
-  ! Reflect at inversion (from above) so it is symmetric with BL routine
-  if (part%zmetres+delz .lt. part%hbl) then
-    part%zmetres = 2*part%hbl - (part%zmetres + delz)
-  else
-    part%zmetres = part%zmetres + delz
-  endif
-
-end subroutine variable_k_above_bl
-
-subroutine variable_k_inhomog(part, pextra)
+subroutine variable_k_within_bl(part, pextra)
   use particleML, only: extraParticle, Particle
+  use snapfldML, only: hinterf
+  use snapgrdML, only: ahalf
   implicit none
 
   type(Particle), intent(inout)      :: part
@@ -1080,10 +985,22 @@ subroutine variable_k_inhomog(part, pextra)
   c = 2.0
   kappa = 0.4
 
+  if (turb_homogeneous) then
+    zeta = 0.5
+    z = 0.5 * h
+  else
+    zeta = z/h
+  endif
+
   if (well_mixed_test) then
-    ol = -100.0
-    ust = 0.6
-    wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
+    if (well_mixed_stable) then
+      ol = 50
+      ust = 0.2
+    else
+      ol = -100
+      ust = 0.4
+      wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
+    endif
   endif
 
   if (ol <= 0.0) then
@@ -1097,6 +1014,8 @@ subroutine variable_k_inhomog(part, pextra)
     dSdz = (1/h) * (1.2 * wst**2 * (2.0/3.0 * zeta**(-1.0/3.0) * (1 - zeta) - zeta**(2.0/3.0)) &
           - 2.535 * ust**2 * (1 - zeta)**(0.5))
 
+    sigw = sqrt(S)
+
     ! Turbulence dissipation rate
     eps = (1.5 - 1.2*zeta**0.3333)*wst**3/h &
         + ust**3/(kappa*z)*(1.0 - zeta)
@@ -1105,6 +1024,7 @@ subroutine variable_k_inhomog(part, pextra)
 
     tlu = (2 * sigu**2) / (c * eps)
     tlv = tlu
+    tlw = (2 * sigw**2) / (c * eps)
 
     Ku = sigu**2 * tlu
     Ku = max(Ku, ku_trop)
@@ -1166,9 +1086,9 @@ subroutine variable_k_inhomog(part, pextra)
     endif
   end do
 
-end subroutine variable_k_inhomog
+end subroutine variable_k_within_bl
 
-subroutine variable_k_inhomog_above(part, pextra)
+subroutine variable_k_above_bl(part, pextra)
 
   USE particleML, only: extraParticle, Particle
 
@@ -1180,14 +1100,23 @@ subroutine variable_k_inhomog_above(part, pextra)
   ! turbulence factors for the troposphere
   real, parameter :: ku_trop = 18.75
   real, parameter :: kz_trop = 1.0
+  real :: delz
 
-  if (nrand+1.gt.max_rands) nrand=1
+  if (nrand+2.gt.max_rands) nrand=1
   part%turbvelu=rands(nrand)*sqrt(2.*ku_trop/part%ptstep)
   part%turbvelv=rands(nrand+1)*sqrt(2.*ku_trop/part%ptstep) 
   part%turbvelw=rands(nrand+2)*sqrt(2.*kz_trop/part%ptstep)
   nrand=nrand+3
+
+  ! delz = part%turbvelw * tstep
+
+  ! part%zmetres = part%zmetres + delz
+
+  ! if (part%zmetres < part%hbl) then ! Reflect from top of BL
+  !   part%zmetres = 2.0 * part%hbl - part%zmetres
+  ! endif
    
-end subroutine variable_k_inhomog_above
+end subroutine variable_k_above_bl
 
 subroutine fixed_k_within_bl(part)
   USE particleML, only: extraParticle, Particle
@@ -1492,7 +1421,7 @@ subroutine diffusion_fields
   obukhov_l_io = - (tv(:,:,2) * u_star_io**3)/(k*g*fhsfc)
 
   if (bl_id == 1) then
-    hbl_io=600
+    hbl_io=constant_bl_height
   endif
 
   ! Calculate the convective velocity scale

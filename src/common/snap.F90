@@ -189,7 +189,7 @@ PROGRAM bsnap
   USE checkdomainML, only: check_in_domain
   USE rwalkML, only: rwalk_init, diffusion_scheme, blfullmix, eta_to_metres, metres_to_eta, turbulence_fields_required, &
                      diffusion_in_metres, density_correction, scheme_is_tke, scheme_is_random_walk, diffusion_scheme_id, &
-                     scheme_uses_adaptive_above_bl, bl_definition, bl_id
+                     scheme_uses_adaptive_above_bl, bl_definition, bl_id, constant_bl_height, well_mixed_test
   USE advance_particleML, only: advance_particle_position
   USE milibML, only: xyconvert, GEO_PARAMS
   USE forwrdML, only: forwrd
@@ -266,6 +266,10 @@ PROGRAM bsnap
   real ::    rt1
   !> fractions to next timestep
   real :: rt2
+
+  ! For writing to txt file
+  integer :: u
+  character(len=500) :: heights_file
 
   ! Turbulence Scheme IDs
   integer, parameter :: DIFF_SNAP               = 1
@@ -716,6 +720,13 @@ PROGRAM bsnap
 #endif
     !$OMP PARALLEL
     !$OMP SINGLE
+
+    if (well_mixed_test) then
+      ! Store in same location as nc file
+      heights_file = fldfil(:index(fldfil, '/', back=.true.)) // 'well_mixed_output.txt'
+      open(newunit=u, file=heights_file, status='replace', action='write')
+    endif
+
     time_loop: do istep = 0, nstep
       call timeloop_timer%start()
       write (iulog, *) 'istep,nplume,npart: ', istep, nplume, npart
@@ -849,7 +860,7 @@ PROGRAM bsnap
       do npl = 1, nplume
         iplume(npl)%ageInSteps = iplume(npl)%ageInSteps + 1
       end do
-
+      
       call particleloop_timer%start()
       ! particle loop
       !$OMP PARALLEL DO &
@@ -892,6 +903,15 @@ PROGRAM bsnap
           call advance_particle_position(pdata(np), pextra, tnow, tstep, rt1, rt2, tf1, tf2, adaptive_timesteps)
 
           if (diffusion_in_metres) call metres_to_eta(pdata(np))
+
+          ! Dump raw particle heights to txt file
+          if (well_mixed_test) then
+            if (istep == 0) then
+              if (tnow == 0.0) write(u, *) pdata(np)%zmetres, 0
+            else
+              if (tnow == 0.0) write(u, *) pdata(np)%zmetres, ihour
+            endif
+          endif
 
           call check_in_domain(pdata(np), out_of_domain)
           if (out_of_domain) then
@@ -986,6 +1006,9 @@ PROGRAM bsnap
     !$OMP END SINGLE
     !$OMP END PARALLEL
 
+    ! Close txt file
+    close(u)
+
   if (lstepr < nstep .AND. lstepr < nstepr) then
     write (iulog, *) 'ERROR: Due to space problems the release period was'
     write (iulog, *) '       shorter than requested.'
@@ -1071,7 +1094,7 @@ contains
     use snapparML, only: GRAV_TYPE_UNDEFINED, GRAV_TYPE_OFF, GRAV_TYPE_FIXED
     use rwalkML, only: diffusion_b => b, diffusion_a_in_bl => a_in_bl, diffusion_a_above_bl => a_above_bl, &
                        bl_definition, diffusion_scheme, entrainment_scheme, turb_homogeneous, &
-                       well_mixed_test, density_correction
+                       well_mixed_test, density_correction, langevin_switch
 
     !> Open file unit
     integer, intent(in) :: snapinput_unit
@@ -1262,6 +1285,9 @@ contains
       case ('bl.definition')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) bl_definition
+      case ('bl.height')
+        if (.not. has_value) goto 12
+        read(cinput(pname_start:pname_end),*) constant_bl_height
       case ('entrainment.scheme')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) entrainment_scheme
@@ -1271,6 +1297,12 @@ contains
       case ('turb.homogeneous.on')
         !..homogeneous turbulence
         turb_homogeneous = .TRUE.
+      case ('langevin.switch.on')
+        !..use long range form of langevin (FLEXPART)
+        langevin_switch = .TRUE.
+      case ('langevin.switch.off')
+        !..use standard langevin formulation
+        langevin_switch = .FALSE.
       case ('density.correction.off')
         !..inhomogeneous turbulence
         density_correction = .FALSE.

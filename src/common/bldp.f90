@@ -300,6 +300,7 @@ subroutine set_constant_bl(part)
   USE snapfldML, only: hlevel2, ps2
   USE snapgrdML, only: alevel, blevel, vlevel
   USE snapdimML, only: nk
+  USE rwalkML, only: constant_bl_height
 
   type(Particle), intent(inout)  :: part
 
@@ -309,8 +310,8 @@ subroutine set_constant_bl(part)
   real :: frac
   integer :: i,j,k
 
-  ! find eta coordinate of 600metres at particle location
-  part%hbl = 600
+  ! find eta coordinate of 600 metres at particle location
+  part%hbl = constant_bl_height
 
   i = part%x
   j = part%y

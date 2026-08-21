@@ -378,8 +378,7 @@ module snapmetML
       met_params%ywind10mv = 'v10'
       met_params%pottempv = 'potential_temperature'
       met_params%sigmav = ''
-      met_params%ptopv = ''
-      met_params%p0 = 'P0'
+      met_params%ptopv = 'P0'
       met_params%apv = 'hyam'
       met_params%bv = 'hybm'
       met_params%sigmadotv = ''
@@ -408,6 +407,9 @@ module snapmetML
       met_params%mass_fraction_cloud_ice_in_air = ""
 
       met_params%cloud_fraction = "3D_cloudcover"
+
+      met_params%blh = 'pblh'
+      met_params%spec_humid = 'specific_humidity'
 !..get grid parameters from field identification
 ! set as long as sortfield still is called
     case('gfs_grib_filter_fimex')
