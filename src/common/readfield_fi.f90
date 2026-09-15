@@ -216,7 +216,7 @@ contains
       call fi_checkload(fio, met_params%pottempv, temp_units, t_io(:, :, k), nt=timepos, nz=ilevel, nr=nr)
 
       !.. Read in specific humidity data for calculation of air density (for density correction term in langevin eq)
-      if (density_correction) then
+      if (turbulence_fields_required) then
         call fi_checkload(fio, met_params%spec_humid, mass_fraction_units, spec_humid(:, :, k), nt=timepos, nz=ilevel, nr=nr)
       endif
 
@@ -299,9 +299,6 @@ contains
     if (bl_id == 2) then
       call fi_checkload(fio, met_params%blh, '', hbl_io(:, :), nt=timepos, nr=nr)
     endif
-
-    !.. Read in 2m air temperature
-    if (turbulence_fields_required) call fi_checkload(fio, met_params%t2m, temp_units, t2m(:, :), nt=timepos, nr=nr)
 
     ! Only read in extra fields if turbulence scheme requires it
     if (turbulence_fields_required) then

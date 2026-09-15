@@ -305,6 +305,7 @@ module snapmetML
       met_params%precaccumv = 'precipitation_amount_acc'
       met_params%precstrativrt = ''
       met_params%precconvrt = ''
+      met_params%spec_humid = 'specific_humidity_ml'
 
       met_params%t2m = 'air_temperature_2m'
       met_params%xflux = 'downward_eastward_momentum_flux_in_air'

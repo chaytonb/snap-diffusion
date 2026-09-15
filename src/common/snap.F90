@@ -188,8 +188,9 @@ PROGRAM bsnap
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
   USE rwalkML, only: rwalk_init, diffusion_scheme, blfullmix, eta_to_metres, metres_to_eta, turbulence_fields_required, &
-                     diffusion_in_metres, density_correction, scheme_is_tke, scheme_is_random_walk, diffusion_scheme_id, &
-                     scheme_uses_adaptive_above_bl, bl_definition, bl_id, constant_bl_height, well_mixed_test
+                     diffusion_in_metres, scheme_is_tke, diffusion_scheme_id, &
+                     scheme_uses_adaptive_above_bl, bl_definition, bl_id, constant_bl_height, well_mixed_test, well_mixed_stable, &
+                     integration_method, integration_id
   USE advance_particleML, only: advance_particle_position
   USE milibML, only: xyconvert, GEO_PARAMS
   USE forwrdML, only: forwrd
@@ -418,14 +419,17 @@ PROGRAM bsnap
     diffusion_scheme_id = DIFF_RANDOM_WALK_FLEX
     diffusion_in_metres = .true.
     turbulence_fields_required = .true.
-    scheme_is_random_walk = .true.
 
   case ('random_walk_name')
     diffusion_scheme_id = DIFF_RANDOM_WALK_NAME
     diffusion_in_metres = .true.
     turbulence_fields_required = .true.
-    scheme_is_random_walk = .true.
     scheme_uses_adaptive_above_bl = .true.
+    if (integration_method == 'leggraup') then
+      integration_id = 2 ! Leggraup
+    else
+      integration_id = 1 ! Euler
+    endif
 
   case ('TKE')
     diffusion_scheme_id = DIFF_TKE
@@ -902,8 +906,6 @@ PROGRAM bsnap
           !..apply the advection and diffusion to particle
           call advance_particle_position(pdata(np), pextra, tnow, tstep, rt1, rt2, tf1, tf2, adaptive_timesteps)
 
-          if (diffusion_in_metres) call metres_to_eta(pdata(np))
-
           ! Dump raw particle heights to txt file
           if (well_mixed_test) then
             if (istep == 0) then
@@ -918,6 +920,8 @@ PROGRAM bsnap
             m = def_comp(pdata(np)%icomp)%to_output
             total_activity_lost_domain(m) = total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
           endif
+
+          if (diffusion_in_metres) call metres_to_eta(pdata(np))
 
           if (pdata(np)%is_active()) then
             if (pdata(np)%hbl > mhmax) mhmax = pdata(np)%hbl
@@ -1298,16 +1302,17 @@ contains
         !..homogeneous turbulence
         turb_homogeneous = .TRUE.
       case ('langevin.switch.on')
-        !..use long range form of langevin (FLEXPART)
+        !..use leggraup drift correction term
         langevin_switch = .TRUE.
       case ('langevin.switch.off')
-        !..use standard langevin formulation
+        !..use standard drift correction term
         langevin_switch = .FALSE.
+      case ('integration.method')
+        if (.not. has_value) goto 12
+        read(cinput(pname_start:pname_end),*) integration_method
       case ('density.correction.off')
-        !..inhomogeneous turbulence
         density_correction = .FALSE.
       case ('density.correction.on')
-        !..homogeneous turbulence
         density_correction = .TRUE.
       case ('adaptive.timesteps.on')
         adaptive_timesteps = .TRUE.
@@ -1318,6 +1323,12 @@ contains
       case ('well.mixed.test.on')
         !..isolate particle motion to vertical turbulence
         well_mixed_test = .TRUE.
+      case ('well.mixed.stable.on')
+        !..isolate particle motion to vertical turbulence
+        well_mixed_stable = .TRUE.
+      case ('well.mixed.stable.off')
+        !..isolate particle motion to vertical turbulence
+        well_mixed_stable = .FALSE.
       case ('diffusion.b.value')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) diffusion_b

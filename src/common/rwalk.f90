@@ -46,7 +46,7 @@ module rwalkML
   real(real64), save, public :: b = 0.875
   logical, save, public :: turb_homogeneous = .FALSE.
   logical, save, public :: langevin_switch = .FALSE.
-  logical, save, public :: well_mixed_stable = .FALSE.
+  logical, save, public :: well_mixed_stable = .TRUE.
   logical, save, public :: well_mixed_test = .FALSE.
   logical, save, public :: blfullmix = .FALSE.
 
@@ -55,10 +55,10 @@ module rwalkML
   logical, save, public :: turbulence_fields_required      = .FALSE.
   logical, save, public :: density_correction              = .FALSE.
   logical, save, public :: scheme_is_tke                   = .FALSE.
-  logical, save, public :: scheme_is_random_walk           = .FALSE.
   logical, save, public :: scheme_uses_adaptive_above_bl   = .FALSE.
   integer, save, public :: diffusion_scheme_id = 0
   integer, save, public :: bl_id = 0
+  integer, save, public :: integration_id = 0
 
   ! Default value if blh set to constant
   real, save, public :: constant_bl_height = 600.0 
@@ -67,6 +67,7 @@ module rwalkML
   character(len=64), save, public :: bl_definition = ''
   character(len=64), save, public :: meteo_type = ''
   character(len=64), save, public :: entrainment_scheme = ''
+  character(len=64), save, public :: integration_method = ''
 
   public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres, &
          metres_to_eta
@@ -118,25 +119,29 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
   elseif (diffusion_scheme_id == 5) then
     ! Check if particle within abl
     if (part%zmetres.lt.part%hbl) then
-      call variable_k_within_bl(part, pextra)
+      call rdm_variable(part, pextra)
     else
-      call variable_k_above_bl(part, pextra)
+      call rdm_variable_above_bl(part, pextra)
     endif
   elseif (diffusion_scheme_id == 3) then
-    ! BL vs FT handled by minimum values in flexpart function
-    if (adaptive) then
-      call random_walk_name(part, pextra, dt_remaining, adaptive)
+    if (integration_id == 1) then
+      ! Standard Langevin formulation with Euler-Maruyama integration
+      if (part%zmetres.lt.part%hbl) then
+        call langevin_thomson_em(part, pextra, dt_remaining, adaptive)
+      else
+        call langevin_thomson_em_above_bl(part, pextra, dt_remaining, adaptive)
+      endif
     else
       if (part%zmetres.lt.part%hbl) then
         if (langevin_switch) then
-          ! Alternative Langevin formulation, FLEXPART long time step form
-          call random_walk_name_fixed_below(part, pextra, dt_remaining, adaptive)
+          ! Langevin equation with Legg and Raupach drift, and LEGGRAUP integration
+          call langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
         else
-          ! Standard Langevin formulation
-          call random_walk_name_fixed_below2(part, pextra, dt_remaining, adaptive)
+          ! Standard Langevin formulation with LEGGRAUP integration
+          call langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
         endif
       else
-        call random_walk_name_fixed_above(part, pextra, dt_remaining, adaptive)
+        call langevin_lr_above_bl(part, pextra, dt_remaining, adaptive)
       endif
     endif
   elseif (diffusion_scheme_id == 4) then
@@ -151,12 +156,12 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
   elseif (diffusion_scheme_id == 7) then
     ! Hybrid near-field far-field scheme
     if (adaptive) then
-      call random_walk_name(part, pextra, dt_remaining, adaptive)
+      call langevin_thomson_em(part, pextra, dt_remaining, adaptive)
     else
       if (part%zmetres.lt.part%hbl) then
-        call variable_k_within_bl(part, pextra)
+        call rdm_variable(part, pextra)
       else
-        call variable_k_above_bl(part, pextra)
+        call rdm_variable_above_bl(part, pextra)
       endif
     endif
   else 
@@ -446,8 +451,184 @@ subroutine flexpart_diffusion_above_abl(part, pextra, dt_remaining)
 
 end subroutine flexpart_diffusion_above_abl
 
+subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
+                         ku, kv, kz, dkdz, dsigw2dz, dsigwdz, &
+                         part, pextra)
 
-subroutine random_walk_name(part, pextra, dt_remaining, adaptive)
+  use particleML, only: extraParticle, Particle
+
+  implicit none
+
+  type(Particle), intent(in)  :: part
+  type(extraParticle), intent(in)  :: pextra
+
+  real, intent(out) :: sigu, sigv, sigw
+  real, intent(out) :: tlu, tlv, tlw
+  real, intent(out) :: ku, kv, kz, dkdz
+  real, intent(out) :: dsigw2dz, dsigwdz
+
+  real, parameter :: c         = 3.0 ! Kolmogorov parameter
+  real, parameter :: kappa     = 0.4 ! Von Karman constant
+  real, parameter :: sigu_min  = 0.25
+  real, parameter :: sigw_min  = 0.1
+  real, parameter :: eps_min   = 1.0e-5
+  real, parameter :: tlu_min   = 20.0
+  real, parameter :: tlv_min   = 20.0
+  real, parameter :: tlw_min   = 20.0
+
+  real :: zeta
+  real :: z_eff
+  real :: ust
+  real :: wst
+  real :: ol
+  real :: z
+  real :: h
+
+  real :: sigw2
+  real :: eps
+  real :: depsdz
+
+  real :: tlw_raw
+  real :: dtlw_dz
+
+  logical :: zeta_clipped = .false.
+
+  ust = pextra%ust
+  wst = pextra%wst
+  ol  = pextra%ol
+
+  z = part%zmetres
+  h = part%hbl
+
+  if (well_mixed_test) then
+     if (well_mixed_stable) then
+        ol  = 50.0
+        ust = 0.2
+     else
+        ol  = -100.0
+        ust = 0.4
+        wst = ust * (h / (kappa * abs(ol)))**(1.0 / 3.0)
+     endif
+  endif
+
+  zeta = z / h
+
+  if (zeta < 1e-2 .or. zeta > 0.99) then
+    zeta_clipped = .true.
+  else
+    zeta_clipped = .false.
+  endif
+
+  zeta = max(1e-2, min(0.99, zeta))
+
+  z_eff = h * zeta
+
+  if (ol <= 0.0) then
+     !============================================================
+     ! Unstable boundary layer
+     !============================================================
+
+     sigu = sqrt(0.4 * wst**2 &
+          + 4.0 * ust**2 * (1.0 - zeta)**1.5)
+
+     sigw2 = 1.2 * wst**2 * zeta**(2.0 / 3.0) * (1.0 - zeta) &
+           + 1.69 * ust**2 * (1.0 - zeta)**1.5
+
+     ! Derivative with respect to z, including dzeta/dz = 1/h
+     dsigw2dz = 1.2 * wst**2 / h * &
+          ( (2.0 / 3.0) * zeta**(-1.0 / 3.0) * (1.0 - zeta) &
+          - zeta**(2.0 / 3.0) ) &
+          - 2.535 * ust**2 / h * (1.0 - zeta)**0.5
+
+     eps = (1.5 - 1.2 * zeta**(1.0 / 3.0)) * wst**3 / h &
+         + ust**3 / (kappa * z) * (1.0 - zeta)
+
+     depsdz = -0.4 * wst**3 * zeta**(-2.0 / 3.0) / h**2 &
+            - ust**3 / (kappa * h**2 * zeta**2)
+
+  else
+     !============================================================
+     ! Stable boundary layer
+     !============================================================
+
+     sigu = 2.0 * ust * (1.0 - zeta)**0.75
+
+     sigw2 = (1.3 * ust * (1.0 - zeta)**0.75)**2
+
+     ! Derivative with respect to z, including dzeta/dz = 1/h
+     dsigw2dz = -2.535 * ust**2 * (1.0 - zeta)**0.5 / h
+
+     eps = ( ust**3 / (kappa * z_eff) &
+          + 4.0 * ust**3 / (kappa * ol) ) * (1.0 - zeta)
+
+     depsdz = -(ust**3 / kappa) * &
+              (1.0 / (h**2 * zeta**2) + 4.0 / (ol * h))
+
+  endif
+
+  ! Enforce minimum dissipation and vertical variance.
+  ! The derivative is zero where a minimum has been applied.
+  if (eps < eps_min) then
+     eps = eps_min
+     depsdz = 0.0
+  endif
+
+  ! Lagrangian timescales
+  tlu = 2.0 * sigu**2 / (c * eps)
+  tlv = tlu
+  tlw_raw = 2.0 * sigw2 / (c * eps)
+
+  ! Vertical timescale floor and derivative
+  if (tlw_raw < tlw_min) then
+     tlw     = tlw_min
+     dtlw_dz = 0.0
+  else
+     tlw = tlw_raw
+
+     dtlw_dz = tlw * &
+          (dsigw2dz / sigw2 - depsdz / eps)
+  endif
+
+  ! Horizontal timescale floors
+  tlu = max(tlu_min, tlu)
+  tlv = max(tlv_min, tlv)
+
+  if (sigw2 < sigw_min**2) then
+     sigw2 = sigw_min**2
+     dsigw2dz = 0.0
+  endif
+
+  if (zeta_clipped) then
+    depsdz = 0.0
+    dsigw2dz = 0.0
+  endif
+
+  sigw = sqrt(sigw2)
+  dsigwdz = 0.5 * dsigw2dz / sigw
+
+  ! Horizontal velocity standard deviations
+  sigu = max(sigu_min, sigu)
+  sigv = sigu
+
+  ! Diffusivities
+  ku = sigu**2 * tlu
+  kv = sigv**2 * tlv
+  kz = sigw2 * tlw
+
+  if (kz <= 1.0) then 
+    kz = 1.0
+    dkdz = 0.0
+  else
+    dkdz = tlw * dsigw2dz + sigw2 * dtlw_dz
+  endif
+
+  ! Product rule:
+  ! dkz/dz = tlw * d(sigma_w^2)/dz
+  !        + sigma_w^2 * dtlw/dz
+
+end subroutine turb_profiles
+
+subroutine langevin_thomson_em(part, pextra, dt_remaining, adaptive)
   USE particleML, only: extraParticle, Particle
 
   !> particle with information
@@ -458,110 +639,31 @@ subroutine random_walk_name(part, pextra, dt_remaining, adaptive)
   real, intent(in) :: dt_remaining
   logical, intent(in) :: adaptive
 
-  real :: kappa ! Von Karmans constant
-  real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
-  real :: tlu, tlv, tlw ! Lagrangian timescales
-  real :: delz ! Turbulent vertical displacement (m)
-  real :: zeta
-  real :: wst, ust, ol, h, z
-  real :: eps, c
+  real :: sigu, sigv, sigw
+  real ::  tlu, tlv, tlw
+  real :: ku, kv, kz, dkdz, dsigw2dz, dsigwdz
+  real :: delz
   real :: dttlu, dttlv, dttlw
-  real :: dsigwdz, dsigw2dz
-  real :: ru, rv, rw
-  real :: sigw2
   real :: density_corr
-  real :: zc
-
-  ust = pextra%ust
-  wst = pextra%wst
-  ol = pextra%ol
-  z = part%zmetres
-  h = part%hbl
-  zeta = max(z/h, 1e-3)
-  zc = zeta * h ! clamped particle height
-  c = 2.0
-  kappa = 0.4
 
   if (density_correction) then
     density_corr = pextra%rhograd/pextra%rho
   else
     density_corr = 0
   endif
-  density_corr = 0
 
-  if (well_mixed_test) then
-    ol = -100
-    ust = 0.5
-    wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
-  endif
-
-  if (zeta < 1.0) then
-    if (ol <= 0.0) then 
-      ! Unstable BL
-      sigu = sqrt(0.4 * wst**2 + 4*ust**2 * (1- zeta)**1.5)
-      sigu = max(sigu, 0.25)
-      sigv = sigu
-
-      sigw2 = 1.2 * wst**2 * zeta**0.666 * (1 - zeta) + 1.69 * ust**2 * (1 - zeta)**1.5
-      sigw = sqrt(sigw2)
-
-      dsigw2dz = (1/h) * (1.2 * wst**2 * (2.0/3.0 * zeta**(-1.0/3.0) * (1 - zeta) - zeta**(2.0/3.0)) &
-            - 2.535 * ust**2 * (1 - zeta)**(0.5))
-      dsigwdz = 0.5 * dsigw2dz / sigw
-
-      eps = (1.5 - 1.2*zeta**0.3333)*wst**3/h &
-            + ust**3/(kappa*zc)*(1.0 - zeta)
-
-      eps = max(1.0e-5, eps)
-
-      tlu = 2.0 * sigu**2 / (c * eps)
-      tlv = tlu
-      tlw = 2.0 * sigw**2 / (c * eps)
-
-      if (sigw < 0.1) then
-        sigw = 0.1
-        dsigwdz = 0
-      endif
-
-    else 
-      ! Stable BL
-      sigu = 2.0*ust*(1.0-zeta)**0.75
-      sigu = max(sigu,0.25)
-      sigv = sigu
-
-      eps = (ust**3 / (kappa * zc) + (4 * ust**3) / (kappa * ol)) * (1 - zeta)
-      eps = max(1.0e-5, eps)
-
-      sigw = 1.3*ust*(1.0-zeta)**0.75
-      dsigwdz = -0.975 * ust / h  * (1 - zeta)**(-0.25)
-
-      tlu = 2.0 * sigu**2 / (c * eps)
-      tlv = tlu
-      tlw = 2.0 * sigw**2 / (c * eps)
-
-      if (sigw < 0.1) then
-        sigw = 0.1
-        dsigwdz = 0
-      endif
-
-    endif
-
-    ! Clamp lagrangian timescales
-    tlu=max(10.,tlu)
-    tlv=max(10.,tlv)
-    tlw=max(20.,tlw)
-
+  if (part%zmetres.lt.part%hbl) then
+    call turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, ku, kv, kz, dkdz, &
+                        dsigw2dz, dsigwdz, part, pextra)
   else
     sigu = 0.25
-    sigv = sigu
+    sigv = 0.25
     sigw = 0.1
-    tlu = 300.0
-    tlv = tlu
-    tlw = 100.0
     dsigwdz = 0.0
+    tlu = 300
+    tlv = 300
+    tlw = 100
   endif
-
-  if (turb_homogeneous) dsigwdz=0
 
   part%tlw = tlw
   part%sigw = sigw
@@ -572,52 +674,41 @@ subroutine random_walk_name(part, pextra, dt_remaining, adaptive)
 
   dttlu = part%ptstep/tlu
   dttlv = part%ptstep/tlv
-
-  ! Calculate turbulent horizontal velocities
-  if (nrand+1.gt.max_rands) nrand=1
-  if (dttlu.lt.0.5) then
-    part%turbvelu = (1.0-dttlu) * part%turbvelu + rands(nrand) * sigu * sqrt(2.0*dttlu)
-  else
-    ru = exp(-dttlu)
-    part%turbvelu = ru * part%turbvelu + rands(nrand) * sigu * sqrt(1.0-ru**2)
-  endif
-
-  if (dttlv.lt.0.5) then
-    part%turbvelv = (1.0-dttlv) * part%turbvelv + rands(nrand+1) * sigv * sqrt(2.0*dttlv)
-  else
-    rv = exp(-dttlv)
-    part%turbvelv = rv * part%turbvelv + rands(nrand+1) * sigv * sqrt(1.0-rv**2)
-  endif
-  nrand = nrand + 2
-
   dttlw = part%ptstep/tlw
 
-  if (nrand.gt.max_rands) nrand=1
-  ! Calculate turbulent vertical velocity
-  if (dttlw.lt.0.5) then
-    part%turbvelw = (1.0-dttlw)*part%turbvelw + part%ptstep*(dsigwdz+density_corr*sigw) &
-                    + sqrt(2.0*dttlw)*rands(nrand)
-  else
-    rw = exp(-dttlw)
-    part%turbvelw = rw*part%turbvelw + tlw*(1.0-rw)*(dsigwdz+density_corr*sigw) &
-                    + sqrt(1.0-rw**2)*rands(nrand)
-  endif
-  nrand = nrand + 1
+  ! Calculate turbulent velocities
+  if (nrand+2.gt.max_rands) nrand=1
+  part%turbvelu = (1.0-dttlu) * part%turbvelu + rands(nrand) * sigu * sqrt(2.0*dttlu)
+  part%turbvelv = (1.0-dttlv) * part%turbvelv + rands(nrand+1) * sigv * sqrt(2.0*dttlv)
+  part%turbvelw = (1.0-dttlw) * part%turbvelw + part%ptstep*(dsigwdz+density_corr*sigw) &
+                  + sqrt(2.0*dttlw)*rands(nrand+2)
+  nrand = nrand + 3
 
   ! Calculate new vertical position
   delz=part%turbvelw*sigw*part%ptstep
+  part%zmetres = part%zmetres + delz
 
-  ! Reflection and position updates
-  if (delz.lt.-part%zmetres) then ! reflection at ground
-    part%zmetres = -part%zmetres - delz
-    part%turbvelw = -part%turbvelw
-  else ! no reflection
-    part%zmetres = part%zmetres+delz
-  endif
+  ! ! Reflection and position updates
+  ! if (part%zmetres < 0.0) then ! reflection at ground
+  !   part%zmetres = -part%zmetres
+  !   part%turbvelw = -part%turbvelw
+  ! endif
 
-end subroutine random_walk_name
+  ! Reflect from both ground and ABL top
+  do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
+    if (part%zmetres < 0.0) then
+      part%zmetres = -part%zmetres
+      part%turbvelw = -part%turbvelw
+    else if (part%zmetres > part%hbl) then
+      part%zmetres = 2.0 * part%hbl - part%zmetres
+      part%turbvelw = -part%turbvelw
+    endif
+  end do
 
-subroutine random_walk_name_fixed_below(part, pextra, dt_remaining, adaptive)
+end subroutine langevin_thomson_em
+
+
+subroutine langevin_thomson_em_above_bl(part, pextra, dt_remaining, adaptive)
   use particleML, only: extraParticle, Particle
   implicit none
 
@@ -627,101 +718,71 @@ subroutine random_walk_name_fixed_below(part, pextra, dt_remaining, adaptive)
   real, intent(in) :: dt_remaining
   logical, intent(in) :: adaptive
 
-  real :: kappa, c
-  real :: sigu, sigv, sigw, sigw2
-  real :: tlu, tlv, tlw
+  real :: sigu, sigv, sigw
+  real ::  tlu, tlv, tlw
+  real :: dsigwdz
   real :: delz
-  real :: zeta, z, h
-  real :: wst, ust, ol
-  real :: eps
   real :: dttlu, dttlv, dttlw
-  real :: dsigw2dz
+
+  ! Default free troposphere values
+  sigu = 0.25
+  sigv = 0.25
+  sigw = 0.1
+  dsigwdz = 0.0
+  tlu = 300
+  tlv = 300
+  tlw = 100
+
+  part%tlw = tlw
+  part%sigw = sigw
+  part%dsigwdz = dsigwdz
+
+  ! Based on turbulence parameters, calculate size of integration time step
+  call set_turbulence_timestep(part, dt_remaining, adaptive)
+
+  dttlu = part%ptstep/tlu
+  dttlv = part%ptstep/tlv
+  dttlw = part%ptstep/tlw
+
+  ! Calculate turbulent velocities
+  if (nrand+1.gt.max_rands) nrand=1
+  part%turbvelu = (1.0-dttlu) * part%turbvelu + rands(nrand) * sigu * sqrt(2.0*dttlu)
+  part%turbvelv = (1.0-dttlv) * part%turbvelv + rands(nrand+1) * sigv * sqrt(2.0*dttlv)
+  part%turbvelw = (1.0-dttlw) * part%turbvelw + sqrt(2.0*dttlw)*rands(nrand+2)
+  nrand = nrand + 3
+
+  ! Calculate new vertical position
+  delz=part%turbvelw*sigw*part%ptstep
+  part%zmetres = part%zmetres + delz
+
+  if (part%zmetres < part%hbl) then ! Reflect from top of BL
+    part%zmetres = 2.0 * part%hbl - part%zmetres
+    part%turbvelw = -part%turbvelw
+  endif
+
+end subroutine langevin_thomson_em_above_bl
+
+subroutine langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
+  use particleML, only: extraParticle, Particle
+  implicit none
+
+  type(Particle), intent(inout) :: part
+  type(extraParticle), intent(inout) :: pextra
+
+  real, intent(in) :: dt_remaining
+  logical, intent(in) :: adaptive
+
+  real :: sigu, sigv, sigw, tlu, tlv, tlw
+  real :: ku, kv, kz, dkdz, dsigw2dz, dsigwdz
+  real :: delz
   real :: ru, rv, rw
+  real :: dttlu, dttlv, dttlw
   real :: density_corr
-  real :: znew, zc
-
-  ust = pextra%ust
-  wst = pextra%wst
-  ol = pextra%ol
-  z = part%zmetres
-  h = part%hbl
-  zeta = min(max(z/h, 1.0e-3), 1.0 - 1.0e-3)
-  zc = zeta * h ! clamped particle height
-  c = 2.0
-  kappa = 0.4
-
-  if (well_mixed_test) then
-    if (well_mixed_stable) then
-      ol = 50
-      ust = 0.2
-    else
-      ol = -100
-      ust = 0.4
-      wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
-    endif
-  endif
-
-  if (density_correction) then
-    density_corr = pextra%rhograd / pextra%rho
-  else
-    density_corr = 0.0
-  endif
 
   density_corr = 0.0
 
-  if (ol <= 0.0) then
-    ! Unstable BL
-    sigu = sqrt(0.4 * wst**2 + 4*ust**2 * (1- zeta)**1.5)
-    sigu = max(sigu, 0.25)
-    sigv = sigu
-
-    sigw2 = 1.2 * wst**2 * zeta**0.666 * (1 - zeta) + 1.69 * ust**2 * (1 - zeta)**1.5
-    sigw = sqrt(sigw2)
-
-    dsigw2dz = (1/h) * (1.2 * wst**2 * (2.0/3.0 * zeta**(-1.0/3.0) * (1 - zeta) - zeta**(2.0/3.0)) &
-           - 2.535 * ust**2 * (1 - zeta)**(0.5))
-
-    eps = (1.5 - 1.2*zeta**0.3333)*wst**3/h &
-          + ust**3/(kappa*zc)*(1.0 - zeta)
-    eps = max(1.0e-5, eps)
-
-    tlu = 2.0 * sigu**2 / (c * eps)
-    tlv = tlu
-    tlw = 2.0 * sigw**2 / (c * eps)
-
-    if (sigw < 0.1) then
-      sigw = 0.1
-      dsigw2dz = 0
-    endif
-
-  else
-    ! Stable BL
-    sigu = 2.0*ust*(1.0-zeta)**0.75
-    sigu = max(sigu,0.25)
-    sigv = sigu
-
-    sigw = 1.3*ust*(1.0-zeta)**0.75
-
-    eps = (ust**3 / (kappa * zc) + (4 * ust**3) / (kappa * ol)) * (1 - zeta)
-    eps = max(1.0e-5, eps)
-
-    dsigw2dz = -2.535 * ust**2 / h * (1 - zeta)**0.5
-
-    tlu = 2.0 * sigu**2 / (c * eps)
-    tlv = tlu
-    tlw = 2.0 * sigw**2 / (c * eps)
-
-    if (sigw < 0.1) then
-      sigw = 0.1
-      dsigw2dz = 0
-    endif
-
-  endif
-
-  ! Clamp lagrangian timescales
-  ! tlu=max(10.,tlu)
-  ! tlv=max(10.,tlv)
-  ! tlw=max(20.,tlw)
+  call turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, ku, kv, kz, dkdz, &
+                    dsigw2dz, dsigwdz, part, pextra)
 
   part%tlw = tlw
   part%sigw = sigw
@@ -732,48 +793,35 @@ subroutine random_walk_name_fixed_below(part, pextra, dt_remaining, adaptive)
   dttlv = part%ptstep / tlv
   dttlw = part%ptstep / tlw
 
-  if (nrand+1 .gt. max_rands) nrand = 1
-  if (dttlu < 0.5) then
-    part%turbvelu = (1.0-dttlu) * part%turbvelu + rands(nrand) * sigu * sqrt(2.0*dttlu)
-  else
-    ru = exp(-dttlu)
-    part%turbvelu = ru * part%turbvelu + rands(nrand) * sigu * sqrt(1.0-ru**2)
-  endif
-  if (dttlv < 0.5) then
-    part%turbvelv = (1.0-dttlv) * part%turbvelv + rands(nrand+1) * sigv * sqrt(2.0*dttlv)
-  else
-    rv = exp(-dttlv)
-    part%turbvelv = rv * part%turbvelv + rands(nrand+1) * sigv * sqrt(1.0-rv**2)
-  endif
-  nrand = nrand + 2
-
-  if (nrand .gt. max_rands) nrand = 1
+  ru = exp(-dttlu)
+  rv = exp(-dttlv)
   rw = exp(-dttlw)
+
+  if (nrand+2 .gt. max_rands) nrand = 1
+  part%turbvelu = ru * part%turbvelu + rands(nrand) * sigu * sqrt(1.0-ru**2)
+  part%turbvelv = rv * part%turbvelv + rands(nrand+1) * sigv * sqrt(1.0-rv**2)
   part%turbvelw = rw * part%turbvelw &
                 + tlw * (1.0 - rw) * (dsigw2dz + density_corr * sigw**2) &
-                + sqrt(1.0 - rw**2) * sigw * rands(nrand)
-  nrand = nrand + 1
+                + sqrt(1.0 - rw**2) * sigw * rands(nrand+2)
+  nrand = nrand + 3
 
   delz = part%turbvelw * part%ptstep
-  znew = part%zmetres + delz
+  part%zmetres = part%zmetres + delz
 
-  do
-    if (znew < 0.0) then
-      znew = -znew
+  ! Reflect from both ground and ABL top
+  do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
+    if (part%zmetres < 0.0) then
+      part%zmetres = -part%zmetres
       part%turbvelw = -part%turbvelw
-    else if (znew > h) then
-      znew = 2.0 * h - znew
+    else if (part%zmetres > part%hbl) then
+      part%zmetres = 2.0 * part%hbl - part%zmetres
       part%turbvelw = -part%turbvelw
-    else
-      exit
-    end if
+    endif
   end do
 
-  part%zmetres = znew
+end subroutine langevin_leggraup_lr
 
-end subroutine random_walk_name_fixed_below
-
-subroutine random_walk_name_fixed_below2(part, pextra, dt_remaining, adaptive)
+subroutine langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
   use particleML, only: extraParticle, Particle
   implicit none
 
@@ -783,103 +831,15 @@ subroutine random_walk_name_fixed_below2(part, pextra, dt_remaining, adaptive)
   real, intent(in) :: dt_remaining
   logical, intent(in) :: adaptive
 
-  real :: kappa, c
-  real :: sigu, sigv, sigw, sigw2
-  real :: tlu, tlv, tlw
+  real :: sigu, sigv, sigw, tlu, tlv, tlw
+  real :: ku, kv, kz, dkdz, dsigw2dz, dsigwdz
   real :: delz
-  real :: zeta, z, h
-  real :: wst, ust, ol
-  real :: eps
-  real :: dttlu, dttlv, dttlw
-  real :: dsigwdz, dsigw2dz
   real :: ru, rv, rw
+  real :: dttlu, dttlv, dttlw
   real :: density_corr
-  real :: znew, zc
 
-  ust = pextra%ust
-  wst = pextra%wst
-  ol = pextra%ol
-  z = part%zmetres
-  h = part%hbl
-  zeta = min(max(z/h, 1.0e-3), 1.0 - 1.0e-3)
-  zc = zeta * h ! clamped particle height
-  c = 2.0
-  kappa = 0.4
-
-  if (well_mixed_test) then
-    if (well_mixed_stable) then
-      ol = 50
-      ust = 0.2
-    else
-      ol = -100
-      ust = 0.4
-      wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
-    endif
-  endif
-
-  if (density_correction) then
-    density_corr = pextra%rhograd / pextra%rho
-  else
-    density_corr = 0.0
-  endif
-
-  density_corr = 0.0
-
-  if (ol <= 0.0) then
-    ! Unstable BL
-
-    sigu = sqrt(0.4 * wst**2 + 4*ust**2 * (1- zeta)**1.5)
-    sigu = max(sigu, 0.25)
-    sigv = sigu
-
-    sigw2 = 1.2 * wst**2 * zeta**0.666 * (1 - zeta) + 1.69 * ust**2 * (1 - zeta)**1.5
-    sigw = sqrt(sigw2)
-
-    dsigw2dz = (1/h) * (1.2 * wst**2 * (2.0/3.0 * zeta**(-1.0/3.0) * (1 - zeta) - zeta**(2.0/3.0)) &
-           - 2.535 * ust**2 * (1 - zeta)**(0.5))
-    dsigwdz = 0.5 * dsigw2dz / sigw
-
-    eps = (1.5 - 1.2*zeta**0.3333)*wst**3/h &
-          + ust**3/(kappa*zc)*(1.0 - zeta)
-    eps = max(1.0e-5, eps)
-
-    tlu = 2.0 * sigu**2 / (c * eps)
-    tlv = tlu
-    tlw = 2.0 * sigw**2 / (c * eps)
-
-    if (sigw < 0.1) then
-      sigw = 0.1
-      dsigwdz = 0
-    endif
-
-  else
-    ! Stable BL
-    sigu = 2.0*ust*(1.0-zeta)**0.75
-    sigu = max(sigu,0.25)
-    sigv = sigu
-
-    sigw = 1.3*ust*(1.0-zeta)**0.75
-
-    eps = (ust**3 / (kappa * zc) + (4 * ust**3) / (kappa * ol)) * (1 - zeta)
-    eps = max(1.0e-5, eps)
-
-    dsigwdz = -0.975 * ust / h  * (1 - zeta)**(-0.25)
-
-    tlu = 2.0 * sigu**2 / (c * eps)
-    tlv = tlu
-    tlw = 2.0 * sigw**2 / (c * eps)
-
-    if (sigw < 0.1) then
-      sigw = 0.1
-      dsigwdz = 0
-    endif
-
-  endif
-
-  ! Clamp lagrangian timescales
-  ! tlu=max(10.,tlu)
-  ! tlv=max(10.,tlv)
-  ! tlw=max(20.,tlw)
+  call turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, ku, kv, kz, dkdz, &
+                    dsigw2dz, dsigwdz, part, pextra)
 
   part%tlw = tlw
   part%sigw = sigw
@@ -890,48 +850,35 @@ subroutine random_walk_name_fixed_below2(part, pextra, dt_remaining, adaptive)
   dttlv = part%ptstep / tlv
   dttlw = part%ptstep / tlw
 
-  if (nrand+1 .gt. max_rands) nrand = 1
-  if (dttlu < 0.5) then
-    part%turbvelu = (1.0-dttlu) * part%turbvelu + rands(nrand) * sigu * sqrt(2.0*dttlu)
-  else
-    ru = exp(-dttlu)
-    part%turbvelu = ru * part%turbvelu + rands(nrand) * sigu * sqrt(1.0-ru**2)
-  endif
-  if (dttlv < 0.5) then
-    part%turbvelv = (1.0-dttlv) * part%turbvelv + rands(nrand+1) * sigv * sqrt(2.0*dttlv)
-  else
-    rv = exp(-dttlv)
-    part%turbvelv = rv * part%turbvelv + rands(nrand+1) * sigv * sqrt(1.0-rv**2)
-  endif
-  nrand = nrand + 2
-
-  if (nrand .gt. max_rands) nrand = 1
+  ru = exp(-dttlu)
+  rv = exp(-dttlv)
   rw = exp(-dttlw)
+
+  if (nrand+2 .gt. max_rands) nrand = 1
+  part%turbvelu = ru * part%turbvelu + rands(nrand) * sigu * sqrt(1.0-ru**2)
+  part%turbvelv = rv * part%turbvelv + rands(nrand+1) * sigv * sqrt(1.0-rv**2)
   part%turbvelw = rw * part%turbvelw &
                 + tlw * (1.0 - rw) * (dsigwdz + density_corr * sigw) &
-                + sqrt(1.0 - rw**2) * rands(nrand)
-  nrand = nrand + 1
+                + sqrt(1.0 - rw**2) * rands(nrand+2)
+  nrand = nrand + 3
 
   delz = part%turbvelw * sigw * part%ptstep
-  znew = part%zmetres + delz
+  part%zmetres = part%zmetres + delz
 
-  do
-    if (znew < 0.0) then
-      znew = -znew
+  ! Reflect from both ground and ABL top
+  do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
+    if (part%zmetres < 0.0) then
+      part%zmetres = -part%zmetres
       part%turbvelw = -part%turbvelw
-    else if (znew > h) then
-      znew = 2.0 * h - znew
+    else if (part%zmetres > part%hbl) then
+      part%zmetres = 2.0 * part%hbl - part%zmetres
       part%turbvelw = -part%turbvelw
-    else
-      exit
-    end if
+    endif
   end do
 
-  part%zmetres = znew
+end subroutine langevin_thomson_lr
 
-end subroutine random_walk_name_fixed_below2
-
-subroutine random_walk_name_fixed_above(part, pextra, dt_remaining, adaptive)
+subroutine langevin_lr_above_bl(part, pextra, dt_remaining, adaptive)
   use particleML, only: extraParticle, Particle
   implicit none
 
@@ -944,6 +891,8 @@ subroutine random_walk_name_fixed_above(part, pextra, dt_remaining, adaptive)
   ! turbulence factors for the troposphere
   real, parameter :: ku_trop = 18.75
   real, parameter :: kz_trop = 1.0
+
+  real :: delz
 
   if (nrand+2.gt.max_rands) nrand=1
   part%turbvelu=rands(nrand)*sqrt(2.*ku_trop/part%ptstep)
@@ -951,122 +900,42 @@ subroutine random_walk_name_fixed_above(part, pextra, dt_remaining, adaptive)
   part%turbvelw=rands(nrand+2)*sqrt(2.*kz_trop/part%ptstep)
   nrand=nrand+3
 
-end subroutine random_walk_name_fixed_above
+  delz = part%turbvelw * tstep
+  part%zmetres = part%zmetres + delz
 
-subroutine variable_k_within_bl(part, pextra)
+  if (part%zmetres < part%hbl) then ! Reflect from top of BL
+    part%zmetres = 2.0 * part%hbl - part%zmetres
+    part%turbvelw = -part%turbvelw
+  endif
+
+end subroutine langevin_lr_above_bl
+
+subroutine rdm_variable(part, pextra)
   use particleML, only: extraParticle, Particle
-  use snapfldML, only: hinterf
-  use snapgrdML, only: ahalf
   implicit none
 
   type(Particle), intent(inout)      :: part
   type(extraParticle), intent(inout) :: pextra
 
-  real :: sigu, sigv, sigw
-  real :: tlu, tlv, tlw
-  real :: Kz, Ku, Kv, dKdz
+  real :: sigu, sigv, sigw, tlu, tlv, tlw
+  real :: ku, kv, kz, dkdz, dsigw2dz, dsigwdz
   real :: delz
-  real :: ust, wst, ol
-  real :: c, kappa
-  real :: eps, depsdz
-  real :: zeta, S, dSdz, h, z
-  real :: B
 
-  ! turbulence factors for the troposphere
-  real, parameter :: ku_trop = 18.75
-  real, parameter :: kz_trop = 1.0
-
-  ust = pextra%ust
-  wst = pextra%wst
-  ol = pextra%ol
-  z = part%zmetres
-  h = part%hbl
-  zeta = z/h 
-  c = 2.0
-  kappa = 0.4
-
-  if (turb_homogeneous) then
-    zeta = 0.5
-    z = 0.5 * h
+  if (part%zmetres.lt.part%hbl) then
+    call turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, ku, kv, kz, dkdz, &
+                        dsigw2dz, dsigwdz, part, pextra)
   else
-    zeta = z/h
-  endif
-
-  if (well_mixed_test) then
-    if (well_mixed_stable) then
-      ol = 50
-      ust = 0.2
-    else
-      ol = -100
-      ust = 0.4
-      wst = ust * (h / (kappa * abs(ol)))**(1.0/3.0)
-    endif
-  endif
-
-  if (ol <= 0.0) then
-
-    sigu = sqrt(0.4 * wst**2 + 4*ust**2 * (1- zeta)**1.5)
-    sigu = max(sigu, 0.25)
-    sigv = sigu
-
-    ! Let S = sigw**2
-    S = 1.2*wst**2 * zeta**0.6666 * (1.0 - zeta) + 1.69*ust**2 * (1.0 - zeta)**1.5
-    dSdz = (1/h) * (1.2 * wst**2 * (2.0/3.0 * zeta**(-1.0/3.0) * (1 - zeta) - zeta**(2.0/3.0)) &
-          - 2.535 * ust**2 * (1 - zeta)**(0.5))
-
-    sigw = sqrt(S)
-
-    ! Turbulence dissipation rate
-    eps = (1.5 - 1.2*zeta**0.3333)*wst**3/h &
-        + ust**3/(kappa*z)*(1.0 - zeta)
-
-    depsdz = -1/(h**2) * (0.4 * wst**3 * zeta**(-2.0/3.0) + ust**3/kappa * zeta**(-2))
-
-    tlu = (2 * sigu**2) / (c * eps)
-    tlv = tlu
-    tlw = (2 * sigw**2) / (c * eps)
-
+    sigu = 0.25
+    sigv = 0.25
+    sigw = 0.1
+    tlu = 300
+    tlv = 300
+    tlw = 100
+    dKdz = 0.0
     Ku = sigu**2 * tlu
-    Ku = max(Ku, ku_trop)
-    Kv = Ku
-
-    Kz = 2.0*S*S/(c*eps)
-    dKdz = Kz * (2*dSdz / S - depsdz / eps)
-    
-    if (Kz < 1.0) then
-      Kz = 1.0
-      dKdz = 0.0
-    endif
-
-  else
-    ! Stable Conditions
-    sigu = 2.0*ust*(1.0-zeta)**0.75
-    sigu = max(sigu,0.25)
-    sigv = sigu
-    sigw = 1.3*ust*(1.0-zeta)**0.75
-
-    eps = (ust**3 / (kappa * z) + (4 * ust**3) / (kappa * ol)) * (1 - zeta)
-  
-    tlu = (2 * sigu**2) / (c * eps)
-    tlv = tlu
-
-    B = 2.0*(1.3**4)*ust*kappa*ol/c     
-
-    Ku = sigu**2 * tlu
-    Ku = max(Ku, ku_trop)
-    Kv = Ku
-
-    ! Kz = sigw**4 / (C * eps), expanded and simplified
-    Kz = B * (1 - zeta)**2 * (z/(ol + 4*z))
-    dKdz = Kz * ((1/z) - 2/(h-z) - 4/(ol + 4*z))
-
-    if (Kz < 1.0) then
-      Kz = 1.0
-      dKdz = 0.0
-    endif
+    Kv = ku
+    Kz = sigw**2 * tlw
   endif
-  
-  if (turb_homogeneous) dKdz = 0.0
 
   if (nrand+2 .gt. max_rands) nrand = 1
   part%turbvelu = sqrt(2.0*(Ku)/tstep) * rands(nrand)
@@ -1075,9 +944,9 @@ subroutine variable_k_within_bl(part, pextra)
   nrand = nrand + 3
 
   delz = part%turbvelw * tstep
-
   part%zmetres = part%zmetres + delz
 
+  ! Reflect from both ground and ABL top
   do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
     if (part%zmetres < 0.0) then
       part%zmetres = -part%zmetres
@@ -1086,9 +955,9 @@ subroutine variable_k_within_bl(part, pextra)
     endif
   end do
 
-end subroutine variable_k_within_bl
+end subroutine rdm_variable
 
-subroutine variable_k_above_bl(part, pextra)
+subroutine rdm_variable_above_bl(part, pextra)
 
   USE particleML, only: extraParticle, Particle
 
@@ -1108,15 +977,15 @@ subroutine variable_k_above_bl(part, pextra)
   part%turbvelw=rands(nrand+2)*sqrt(2.*kz_trop/part%ptstep)
   nrand=nrand+3
 
-  ! delz = part%turbvelw * tstep
-
-  ! part%zmetres = part%zmetres + delz
-
-  ! if (part%zmetres < part%hbl) then ! Reflect from top of BL
-  !   part%zmetres = 2.0 * part%hbl - part%zmetres
-  ! endif
+  if (.not.well_mixed_test) then
+    delz = part%turbvelw * tstep
+    part%zmetres = part%zmetres + delz
+    if (part%zmetres < part%hbl) then ! Reflect from top of BL
+      part%zmetres = 2.0 * part%hbl - part%zmetres
+    endif
+  endif
    
-end subroutine variable_k_above_bl
+end subroutine rdm_variable_above_bl
 
 subroutine fixed_k_within_bl(part)
   USE particleML, only: extraParticle, Particle
