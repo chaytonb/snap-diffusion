@@ -33,7 +33,7 @@ module rwalkML
   real(real64), parameter :: tmix_h = 15.0*60.0 ! Horizontal base-time time = 15 min (to reach ax^b width)
   real(real64), parameter :: lmax = 0.28 ! Maximum l-eta in the mixing layer
   real(real64), parameter :: labove = 0.03 ! Standard l-eta above the mixing layer
-  real(real64), parameter :: entrainment = 0.10 ! Entrainment zone = 10%*h
+  real(real64), parameter :: entrainment = 0.0 ! Entrainment zone = 10%*h
   real, parameter :: dt_min = 1.0 ! minimum timestep size for adaptive timestepping
 
   ! Values for random number generation
@@ -56,6 +56,7 @@ module rwalkML
   logical, save, public :: density_correction              = .FALSE.
   logical, save, public :: scheme_is_tke                   = .FALSE.
   logical, save, public :: scheme_uses_adaptive_above_bl   = .FALSE.
+  logical, save, public :: reflecting_top   = .FALSE.
   integer, save, public :: diffusion_scheme_id = 0
   integer, save, public :: bl_id = 0
   integer, save, public :: integration_id = 0
@@ -109,39 +110,54 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
   real, intent(in) :: dt_remaining
   logical, intent(in) :: adaptive
 
-  if (diffusion_scheme_id == 2) then
-    ! Check if particle within abl
-    if (part%zmetres.lt.part%hbl) then
-      call flexpart_diffusion_within_abl(part,pextra, dt_remaining, adaptive)
-    else
-      call flexpart_diffusion_above_abl(part, pextra, dt_remaining)
-    endif
-  elseif (diffusion_scheme_id == 5) then
-    ! Check if particle within abl
-    if (part%zmetres.lt.part%hbl) then
-      call rdm_variable(part, pextra)
-    else
-      call rdm_variable_above_bl(part, pextra)
-    endif
-  elseif (diffusion_scheme_id == 3) then
-    if (integration_id == 1) then
-      ! Standard Langevin formulation with Euler-Maruyama integration
+  if (diffusion_scheme_id == 5) then
+    if (reflecting_top) then
+      ! Check if particle within abl
       if (part%zmetres.lt.part%hbl) then
-        call langevin_thomson_em(part, pextra, dt_remaining, adaptive)
+        call rdm_variable(part, pextra, dt_remaining, adaptive)
       else
-        call langevin_thomson_em_above_bl(part, pextra, dt_remaining, adaptive)
+        call rdm_variable_above_bl(part, pextra)
       endif
     else
-      if (part%zmetres.lt.part%hbl) then
-        if (langevin_switch) then
-          ! Langevin equation with Legg and Raupach drift, and LEGGRAUP integration
-          call langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
+      call rdm_variable(part, pextra, dt_remaining, adaptive)
+    endif
+  elseif (diffusion_scheme_id == 3) then
+    
+    if (integration_id == 1) then
+      ! Standard Langevin formulation with Euler-Maruyama integration
+      if (reflecting_top) then
+        if (part%zmetres.lt.part%hbl) then
+          call langevin_thomson_em(part, pextra, dt_remaining, adaptive)
         else
-          ! Standard Langevin formulation with LEGGRAUP integration
-          call langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
+          call langevin_thomson_em_above_bl(part, pextra, dt_remaining, adaptive)
         endif
       else
-        call langevin_lr_above_bl(part, pextra, dt_remaining, adaptive)
+        call langevin_thomson_em(part, pextra, dt_remaining, adaptive)
+      endif
+    else
+      if (langevin_switch) then
+        if (reflecting_top) then
+          if (part%zmetres.lt.part%hbl) then
+            ! Langevin equation with Legg and Raupach drift, and LEGGRAUP integration
+            call langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
+          else
+            call langevin_lr_above_bl(part, pextra, dt_remaining, adaptive)
+          endif
+        else
+          call langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
+        endif
+      else
+        if (reflecting_top) then
+          ! Standard Langevin formulation with LEGGRAUP integration
+          if (part%zmetres.lt.part%hbl) then
+            ! Langevin equation with Legg and Raupach drift, and LEGGRAUP integration
+            call langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
+          else
+            call langevin_lr_above_bl(part, pextra, dt_remaining, adaptive)
+          endif
+        else
+          call langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
+        endif
       endif
     endif
   elseif (diffusion_scheme_id == 4) then
@@ -153,17 +169,17 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
     endif
   elseif (diffusion_scheme_id == 6) then
     call tke_diffusion(part, pextra, dt_remaining, adaptive)
-  elseif (diffusion_scheme_id == 7) then
-    ! Hybrid near-field far-field scheme
-    if (adaptive) then
-      call langevin_thomson_em(part, pextra, dt_remaining, adaptive)
-    else
-      if (part%zmetres.lt.part%hbl) then
-        call rdm_variable(part, pextra)
-      else
-        call rdm_variable_above_bl(part, pextra)
-      endif
-    endif
+  ! elseif (diffusion_scheme_id == 7) then
+  !   ! Hybrid near-field far-field scheme
+  !   if (adaptive) then
+  !     call langevin_thomson_em(part, pextra, dt_remaining, adaptive)
+  !   else
+  !     if (part%zmetres.lt.part%hbl) then
+  !       call rdm_variable(part, pextra)
+  !     else
+  !       call rdm_variable_above_bl(part, pextra)
+  !     endif
+  !   endif
   else 
     call rwalk(blfullmix, part, pextra)
   endif
@@ -222,11 +238,11 @@ subroutine rwalk(blfullmix,part,pextra)
 ! vertical diffusion
   if (part%z <= part%tbl) then ! Above boundary layer
 
-    ! if ((part%z + vrdbla*rnd(3)).gt.part%tbl) then ! reflect off BL top
-    !   part%z = 2 * part%tbl - (part%z + vrdbla*rnd(3))
-    ! else
-    !   part%z = part%z + vrdbla*rnd(3)
-    ! endif
+    if ((part%z + vrdbla*rnd(3)).gt.part%tbl) then ! reflect off BL top
+      part%z = 2 * part%tbl - (part%z + vrdbla*rnd(3))
+    else
+      part%z = part%z + vrdbla*rnd(3)
+    endif
     part%z = part%z + vrdbla*rnd(3)
 
   else ! In boundary layer
@@ -257,199 +273,6 @@ subroutine rwalk(blfullmix,part,pextra)
     end if
   end if
 end subroutine rwalk
-
-subroutine flexpart_diffusion_within_abl(part, pextra, dt_remaining, adaptive)
-  USE particleML, only: extraParticle, Particle
-  
-  !> particle with information
-  type(Particle), intent(inout)  :: part
-  !> extra information regarding the particle
-  type(extraParticle), intent(inout) :: pextra
-
-  real, intent(in) :: dt_remaining
-  logical, intent(in) :: adaptive
-
-  real :: sigu, sigv, sigw ! Turbulent velocity standard deviations
-  real :: tlu, tlv, tlw ! Lagrangian timescales
-  real :: ru, rv, rw ! Turbulence correlation terms
-  real :: delz ! Turbulent vertical displacement (m)
-  real :: dsigwdz
-  real :: dttlw
-  real :: density_corr ! Density correction term
-  real :: scaled_height
-  real :: wst ! convective scale velocity
-  real :: ol ! obukhov length
-  real :: ust ! friction velocity
-
-  ! Dimensionless height 
-  if (turb_homogeneous) then ! Take middle BL value if homogeneous
-    scaled_height = 0.5
-  else
-    scaled_height = max(part%zmetres/part%hbl, 1e-3)
-  endif
-
-  ust = pextra%ust
-  wst = pextra%wst
-  ol = pextra%ol
-
-  if (well_mixed_test) then
-    wst = 1.5
-    ol = -100
-    ust = 0.5
-  endif
-
-  ! Case 1, Neutral Conditions
-  if (part%hbl/ABS(ol).lt.1.) then
-    ust = max(1.e-4, ust)
-
-    ! Eq. 7.25 Hanna 1982: 
-    sigu = 2.0 * ust * EXP(-3.e-4*part%zmetres/ust)
-    sigu = MAX(sigu, 1.e-5)
-
-    ! Eq. 7.26 Hanna 1982:
-    sigv = 1.3 * ust * EXP(-2.e-4*part%zmetres/ust)
-    sigv=max(sigv,1.e-5)
-    sigw=sigv
-
-    ! Vertical gradient of sigw
-    dsigwdz=(-2.e-4*sigw)/ust
-
-    ! Lagrangian timescales
-    tlu=0.5*part%zmetres/sigw/(1.+1.5e-3*part%zmetres/ust)
-    tlv=tlu
-    tlw=tlu
-
-  ! Case 2 , Unstable Conditions
-  elseif (ol.lt.0.) then
-
-    sigu = ust * (12 - 0.5 * part%hbl/ol)**0.33333
-    sigv = sigu
-
-    sigw = (1.2 * wst**2 *(1-0.9*scaled_height)*(scaled_height)**0.6666 + (1.8 - 1.4*scaled_height)*ust**2)**0.5
-    dsigwdz=0.5/sigw/part%hbl*(-1.4*ust**2+wst**2*(0.8*max(scaled_height,1.e-3)**(-.33333)-1.8*scaled_height**0.66666))
-
-    ! Lagrangian timescales
-    tlu = 0.15 * part%hbl/sigu
-    tlv = tlu
-    if (part%zmetres.lt.abs(ol)) then
-      tlw=0.1*part%zmetres/(sigw*(0.55-0.38*abs(part%zmetres/ol)))
-    else if (scaled_height.lt.0.1) then
-      tlw=0.59*part%zmetres/sigw
-    else
-      tlw=0.15*part%hbl/sigw*(1.-exp(-5*scaled_height))
-    endif
-    
-  ! Case 3, Stable Conditions 
-  else
-    sigu=2.*ust*(1.-scaled_height) !. 7.20, Hanna
-    sigv=1.3*ust*(1.-scaled_height) !. 7.19, Hanna
-    sigu=max(sigu,1.e-6)
-    sigv=max(sigv,1.e-6)
-    sigw=sigv !. 7.19, Hanna
-    dsigwdz=-1.3*ust/part%hbl
-
-    ! Lagrangian timescales
-    tlu=0.15*part%hbl/sigu*(sqrt(scaled_height)) !. 7.22, Hanna
-    tlv=0.07*part%hbl/sigv*(sqrt(scaled_height)) !. 7.23, Hanna
-    tlw=0.1*part%hbl/sigw*scaled_height**0.8
-
-  endif
-
-  ! Clamp lagrangian timescales
-  tlu=max(10.,tlu)
-  tlv=max(10.,tlv)
-  tlw=max(30.,tlw)
-
-  part%tlw = tlw
-  part%dsigwdz = dsigwdz
-  part%sigw = sigw
-
-  ! Based on turbulence parameters, calculate size of integration time step
-  call set_turbulence_timestep(part, dt_remaining, adaptive)
-
-  ! Calculate turbulent horizontal velocities
-  if (nrand+1.gt.max_rands) nrand=1
-  if (part%ptstep/tlu.lt..5) then
-    part%turbvelu=(1.-part%ptstep/tlu)*part%turbvelu+rands(nrand)*sigu*sqrt(2.*part%ptstep/tlu)
-  else
-    ru=exp(-part%ptstep/tlu)
-    part%turbvelu=ru*part%turbvelu+rands(nrand)*sigu*sqrt(1.-ru**2)
-  endif
-  if (part%ptstep/tlv.lt..5) then
-    part%turbvelv=(1.-part%ptstep/tlv)*part%turbvelv+rands(nrand+1)*sigv*sqrt(2.*part%ptstep/tlv)
-  else
-    rv=exp(-part%ptstep/tlv)
-    part%turbvelv=rv*part%turbvelv+rands(nrand+1)*sigv*sqrt(1.-rv**2)
-  endif
-  nrand=nrand+2
-
-  ! Transform turbulent velocities from along/crosswind to x/y
-  call align_turbvels(part, pextra)
-
-  density_corr=pextra%rhograd/pextra%rho
-
-  ! ratio of time step to lagrangian timescale for autocorrelation
-  dttlw = part%ptstep/tlw
-
-  if (nrand+1.gt.max_rands) nrand=1
-  ! Calculate turbulent vertical velocity
-  if (dttlw.lt..5) then ! Small adaptive time steps
-    part%turbvelw=((1.-dttlw)*part%turbvelw + part%ptstep*(dsigwdz+density_corr*sigw)) * part%icbt &
-       + sqrt(2.*dttlw) * rands(nrand)
-    delz=part%turbvelw*sigw*part%ptstep
-  else ! larger time steps
-    rw=exp(-dttlw)
-    part%turbvelw=(rw*part%turbvelw +tlw*(1.-rw)*(dsigwdz+density_corr*sigw)) * part%icbt &
-         + sqrt(1.-rw**2) * rands(nrand)
-    delz=part%turbvelw*sigw*part%ptstep 
-  endif
-  nrand=nrand+2
-
-  ! Calculate new vertical position
-  if (abs(delz).gt.part%hbl) then
-    delz=mod(delz,part%hbl)
-  endif
-
-  ! Reflection and position updates
-  if (delz.lt.-part%zmetres) then         ! reflection at ground
-    part%zmetres = -part%zmetres - delz
-    part%icbt = -1
-  else if (delz.gt.(part%hbl-part%zmetres)) then ! reflection at top
-    part%zmetres = -part%zmetres-delz+2.*part%hbl
-    part%icbt = -1
-  else                         ! no reflection
-    part%zmetres = part%zmetres+delz
-    part%icbt = 1
-  endif
-
-end subroutine flexpart_diffusion_within_abl
-
-subroutine flexpart_diffusion_above_abl(part, pextra, dt_remaining)
-
-  USE particleML, only: extraParticle, Particle
-
-  !> particle with information
-  type(Particle), intent(inout)  :: part
-  !> extra information regarding the particle 
-  type(extraParticle), intent(inout) :: pextra
-
-  real, intent(in) :: dt_remaining
-
-  ! turbulence factors for the troposphere
-  real, parameter :: d_trop = 50.0
-  real :: uxscale
-
-  call set_turbulence_timestep(part, dt_remaining, .false.)
-
-  ! assume within troposphere
-  uxscale=sqrt(2.*d_trop/part%ptstep)
-  if (nrand+1.gt.max_rands) nrand=1
-  part%turbvelu=rands(nrand)*uxscale
-  part%turbvelv=rands(nrand+1)*uxscale 
-  nrand=nrand+2
-  part%turbvelw=0
-
-end subroutine flexpart_diffusion_above_abl
 
 subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
                          ku, kv, kz, dkdz, dsigw2dz, dsigwdz, &
@@ -491,8 +314,6 @@ subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
   real :: tlw_raw
   real :: dtlw_dz
 
-  logical :: zeta_clipped = .false.
-
   ust = pextra%ust
   wst = pextra%wst
   ol  = pextra%ol
@@ -512,14 +333,7 @@ subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
   endif
 
   zeta = z / h
-
-  if (zeta < 1e-2 .or. zeta > 0.99) then
-    zeta_clipped = .true.
-  else
-    zeta_clipped = .false.
-  endif
-
-  zeta = max(1e-2, min(0.99, zeta))
+  zeta = max(1e-3, min(0.999, zeta))
 
   z_eff = h * zeta
 
@@ -598,11 +412,6 @@ subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
      dsigw2dz = 0.0
   endif
 
-  if (zeta_clipped) then
-    depsdz = 0.0
-    dsigw2dz = 0.0
-  endif
-
   sigw = sqrt(sigw2)
   dsigwdz = 0.5 * dsigw2dz / sigw
 
@@ -670,7 +479,7 @@ subroutine langevin_thomson_em(part, pextra, dt_remaining, adaptive)
   part%dsigwdz = dsigwdz
 
   ! Based on turbulence parameters, calculate size of integration time step
-  call set_turbulence_timestep(part, dt_remaining, adaptive)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
 
   dttlu = part%ptstep/tlu
   dttlv = part%ptstep/tlv
@@ -689,24 +498,25 @@ subroutine langevin_thomson_em(part, pextra, dt_remaining, adaptive)
   part%zmetres = part%zmetres + delz
 
   ! ! Reflection and position updates
-  ! if (part%zmetres < 0.0) then ! reflection at ground
-  !   part%zmetres = -part%zmetres
-  !   part%turbvelw = -part%turbvelw
-  ! endif
-
-  ! Reflect from both ground and ABL top
-  do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
-    if (part%zmetres < 0.0) then
+  if (reflecting_top) then
+    ! Reflect from both ground and ABL top
+    do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
+      if (part%zmetres < 0.0) then
+        part%zmetres = -part%zmetres
+        part%turbvelw = -part%turbvelw
+      else if (part%zmetres > part%hbl) then
+        part%zmetres = 2.0 * part%hbl - part%zmetres
+        part%turbvelw = -part%turbvelw
+      endif
+    end do
+  else
+    if (part%zmetres < 0.0) then ! reflection at ground
       part%zmetres = -part%zmetres
       part%turbvelw = -part%turbvelw
-    else if (part%zmetres > part%hbl) then
-      part%zmetres = 2.0 * part%hbl - part%zmetres
-      part%turbvelw = -part%turbvelw
     endif
-  end do
+  endif
 
 end subroutine langevin_thomson_em
-
 
 subroutine langevin_thomson_em_above_bl(part, pextra, dt_remaining, adaptive)
   use particleML, only: extraParticle, Particle
@@ -738,14 +548,14 @@ subroutine langevin_thomson_em_above_bl(part, pextra, dt_remaining, adaptive)
   part%dsigwdz = dsigwdz
 
   ! Based on turbulence parameters, calculate size of integration time step
-  call set_turbulence_timestep(part, dt_remaining, adaptive)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
 
   dttlu = part%ptstep/tlu
   dttlv = part%ptstep/tlv
   dttlw = part%ptstep/tlw
 
   ! Calculate turbulent velocities
-  if (nrand+1.gt.max_rands) nrand=1
+  if (nrand+2.gt.max_rands) nrand=1
   part%turbvelu = (1.0-dttlu) * part%turbvelu + rands(nrand) * sigu * sqrt(2.0*dttlu)
   part%turbvelv = (1.0-dttlv) * part%turbvelv + rands(nrand+1) * sigv * sqrt(2.0*dttlv)
   part%turbvelw = (1.0-dttlw) * part%turbvelw + sqrt(2.0*dttlw)*rands(nrand+2)
@@ -779,7 +589,11 @@ subroutine langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
   real :: dttlu, dttlv, dttlw
   real :: density_corr
 
-  density_corr = 0.0
+  if (density_correction) then
+    density_corr = pextra%rhograd/pextra%rho
+  else
+    density_corr = 0
+  endif
 
   call turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, ku, kv, kz, dkdz, &
                     dsigw2dz, dsigwdz, part, pextra)
@@ -787,7 +601,7 @@ subroutine langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
   part%tlw = tlw
   part%sigw = sigw
 
-  call set_turbulence_timestep(part, dt_remaining, adaptive)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
 
   dttlu = part%ptstep / tlu
   dttlv = part%ptstep / tlv
@@ -808,16 +622,23 @@ subroutine langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
   delz = part%turbvelw * part%ptstep
   part%zmetres = part%zmetres + delz
 
-  ! Reflect from both ground and ABL top
-  do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
-    if (part%zmetres < 0.0) then
+  if (reflecting_top) then
+    ! Reflect from both ground and ABL top
+    do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
+      if (part%zmetres < 0.0) then
+        part%zmetres = -part%zmetres
+        part%turbvelw = -part%turbvelw
+      else if (part%zmetres > part%hbl) then
+        part%zmetres = 2.0 * part%hbl - part%zmetres
+        part%turbvelw = -part%turbvelw
+      endif
+    end do
+  else
+    if (part%zmetres < 0.0) then ! reflection at ground
       part%zmetres = -part%zmetres
       part%turbvelw = -part%turbvelw
-    else if (part%zmetres > part%hbl) then
-      part%zmetres = 2.0 * part%hbl - part%zmetres
-      part%turbvelw = -part%turbvelw
     endif
-  end do
+  endif
 
 end subroutine langevin_leggraup_lr
 
@@ -838,13 +659,30 @@ subroutine langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
   real :: dttlu, dttlv, dttlw
   real :: density_corr
 
-  call turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, ku, kv, kz, dkdz, &
-                    dsigw2dz, dsigwdz, part, pextra)
+  if (density_correction) then
+    density_corr = pextra%rhograd/pextra%rho
+  else
+    density_corr = 0
+  endif
+
+  if (part%zmetres.lt.part%hbl) then
+    call turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, ku, kv, kz, dkdz, &
+                        dsigw2dz, dsigwdz, part, pextra)
+  else
+    sigu = 0.25
+    sigv = 0.25
+    sigw = 0.1
+    dsigwdz = 0.0
+    tlu = 300
+    tlv = 300
+    tlw = 100
+  endif
 
   part%tlw = tlw
   part%sigw = sigw
+  part%dsigwdz = dsigwdz
 
-  call set_turbulence_timestep(part, dt_remaining, adaptive)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
 
   dttlu = part%ptstep / tlu
   dttlv = part%ptstep / tlv
@@ -865,16 +703,23 @@ subroutine langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
   delz = part%turbvelw * sigw * part%ptstep
   part%zmetres = part%zmetres + delz
 
-  ! Reflect from both ground and ABL top
-  do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
-    if (part%zmetres < 0.0) then
+  if (reflecting_top) then
+    ! Reflect from both ground and ABL top
+    do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
+      if (part%zmetres < 0.0) then
+        part%zmetres = -part%zmetres
+        part%turbvelw = -part%turbvelw
+      else if (part%zmetres > part%hbl) then
+        part%zmetres = 2.0 * part%hbl - part%zmetres
+        part%turbvelw = -part%turbvelw
+      endif
+    end do
+  else
+    if (part%zmetres < 0.0) then ! reflection at ground
       part%zmetres = -part%zmetres
       part%turbvelw = -part%turbvelw
-    else if (part%zmetres > part%hbl) then
-      part%zmetres = 2.0 * part%hbl - part%zmetres
-      part%turbvelw = -part%turbvelw
     endif
-  end do
+  endif
 
 end subroutine langevin_thomson_lr
 
@@ -900,7 +745,7 @@ subroutine langevin_lr_above_bl(part, pextra, dt_remaining, adaptive)
   part%turbvelw=rands(nrand+2)*sqrt(2.*kz_trop/part%ptstep)
   nrand=nrand+3
 
-  delz = part%turbvelw * tstep
+  delz = part%turbvelw * part%ptstep
   part%zmetres = part%zmetres + delz
 
   if (part%zmetres < part%hbl) then ! Reflect from top of BL
@@ -910,12 +755,15 @@ subroutine langevin_lr_above_bl(part, pextra, dt_remaining, adaptive)
 
 end subroutine langevin_lr_above_bl
 
-subroutine rdm_variable(part, pextra)
+subroutine rdm_variable(part, pextra, dt_remaining, adaptive)
   use particleML, only: extraParticle, Particle
   implicit none
 
   type(Particle), intent(inout)      :: part
   type(extraParticle), intent(inout) :: pextra
+
+  real, intent(in) :: dt_remaining
+  logical, intent(in) :: adaptive
 
   real :: sigu, sigv, sigw, tlu, tlv, tlw
   real :: ku, kv, kz, dkdz, dsigw2dz, dsigwdz
@@ -932,28 +780,41 @@ subroutine rdm_variable(part, pextra)
     tlv = 300
     tlw = 100
     dKdz = 0.0
+    dsigwdz = 0.0
     Ku = sigu**2 * tlu
     Kv = ku
     Kz = sigw**2 * tlw
   endif
 
+  part%k = Kz
+  part%dkdz = dkdz
+
+  ! Based on turbulence parameters, calculate size of integration time step
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
+
   if (nrand+2 .gt. max_rands) nrand = 1
-  part%turbvelu = sqrt(2.0*(Ku)/tstep) * rands(nrand)
-  part%turbvelv = sqrt(2.0*(Kv)/tstep) * rands(nrand+1)
-  part%turbvelw = dKdz + sqrt(2.0*(Kz)/tstep) * rands(nrand+2)
+  part%turbvelu = sqrt(2.0*(Ku)/part%ptstep) * rands(nrand)
+  part%turbvelv = sqrt(2.0*(Kv)/part%ptstep) * rands(nrand+1)
+  part%turbvelw = dKdz + sqrt(2.0*(Kz)/part%ptstep) * rands(nrand+2)
   nrand = nrand + 3
 
-  delz = part%turbvelw * tstep
+  delz = part%turbvelw * part%ptstep
   part%zmetres = part%zmetres + delz
 
-  ! Reflect from both ground and ABL top
-  do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
-    if (part%zmetres < 0.0) then
+  if (reflecting_top) then
+    ! Reflect from both ground and ABL top
+    do while (part%zmetres < 0.0 .or. part%zmetres > part%hbl)
+      if (part%zmetres < 0.0) then
+        part%zmetres = -part%zmetres
+      else if (part%zmetres > part%hbl) then
+        part%zmetres = 2.0 * part%hbl - part%zmetres
+      endif
+    end do
+  else
+    if (part%zmetres < 0.0) then ! reflection at ground
       part%zmetres = -part%zmetres
-    else if (part%zmetres > part%hbl) then
-      part%zmetres = 2.0 * part%hbl - part%zmetres
     endif
-  end do
+  endif
 
 end subroutine rdm_variable
 
@@ -977,12 +838,10 @@ subroutine rdm_variable_above_bl(part, pextra)
   part%turbvelw=rands(nrand+2)*sqrt(2.*kz_trop/part%ptstep)
   nrand=nrand+3
 
-  if (.not.well_mixed_test) then
-    delz = part%turbvelw * tstep
-    part%zmetres = part%zmetres + delz
-    if (part%zmetres < part%hbl) then ! Reflect from top of BL
-      part%zmetres = 2.0 * part%hbl - part%zmetres
-    endif
+  delz = part%turbvelw * part%ptstep
+  part%zmetres = part%zmetres + delz
+  if (part%zmetres < part%hbl) then ! Reflect from top of BL
+    part%zmetres = 2.0 * part%hbl - part%zmetres
   endif
    
 end subroutine rdm_variable_above_bl
@@ -997,21 +856,19 @@ subroutine fixed_k_within_bl(part)
   real :: rnd(1)
   integer, parameter :: hor_diffu = 5300 ! m^2 s^-1 (BL horizontal diffusion)
   real, parameter :: K_ft = 1.5 ! m^2 s^-1 (FT vertical diffusion)
-  real :: dt, delz
-
-  dt = tstep
+  real :: delz
 
   if (nrand+2.gt.max_rands) nrand=1
   part%turbvelu = ((2*hor_diffu)/tstep)**0.5 * rands(nrand)
   part%turbvelv = ((2*hor_diffu)/tstep)**0.5 * rands(nrand+1)
-  part%turbvelw = sqrt((2.0 * K_ft) / dt) * rands(nrand + 2)
+  part%turbvelw = sqrt((2.0 * K_ft) / tstep) * rands(nrand + 2)
   nrand=nrand+3
 
   call random_number(rnd)
   part%zmetres = rnd(1) * part%hbl
 
   ! Apply a vertical step equal in size to FT diffusion
-  delz = part%turbvelw * dt
+  delz = part%turbvelw * tstep
 
   ! Reflection and position updates
   if (delz.lt.-part%zmetres) then         ! reflection at ground
@@ -1088,7 +945,7 @@ subroutine tke_diffusion(part, pextra, dt_remaining, adaptive)
 
   rhoaux = pextra%rhograd/pextra%rho
 
-  call set_turbulence_timestep(part, dt_remaining, adaptive)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
 
   dttlw = part%ptstep/tlw
 
@@ -1492,20 +1349,27 @@ subroutine metres_to_eta(part)
 
 end subroutine metres_to_eta
 
-subroutine set_turbulence_timestep(part, dt_remaining, adaptive)
+subroutine set_turbulence_timestep(part, dt_remaining, adaptive, rdm)
   use particleML, only: Particle
   implicit none
 
   type(Particle), intent(inout) :: part
   real, intent(in) :: dt_remaining
   logical, intent(in) :: adaptive
+  logical, intent(in) :: rdm
 
   if (adaptive) then
-     part%ptstep = min(part%tlw, &
+      ! RDM time step restriction
+    if (rdm) then
+      part%ptstep = (part%k/(2*part%dkdz)**2) * 0.10
+    else
+      ! Langevin time step restriction
+      part%ptstep = min(part%tlw, &
                       part%hbl / max(2.0 * abs(part%turbvelw * part%sigw), 1.e-5), &
                       0.5 / max(abs(part%dsigwdz), 1.e-6)) * 0.10
-     part%ptstep = max(part%ptstep, dt_min)
-     part%ptstep = min(part%ptstep, dt_remaining)
+    endif
+    part%ptstep = max(part%ptstep, dt_min)
+    part%ptstep = min(part%ptstep, dt_remaining)
   else
      part%ptstep = dt_remaining
   end if

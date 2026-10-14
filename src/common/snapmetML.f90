@@ -313,6 +313,8 @@ module snapmetML
       met_params%yflux = 'downward_northward_momentum_flux_in_air'
       met_params%yflux_is_accumulated = .true.
 
+      met_params%blh = 'atmosphere_boundary_layer_thickness'
+
       ! met_params%z0 = 'surface_roughness_length'
       met_params%z0 = "SFX_Z0"
       met_params%hflux = 'integral_of_surface_downward_sensible_heat_flux_wrt_time'

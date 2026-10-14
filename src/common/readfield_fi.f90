@@ -1184,7 +1184,7 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
   real :: pressure_below, pressure_above
 
   where (hbl < 50.0) hbl = 50.0
-  where (hbl > 3000.0) hbl = 3000.0
+  where (hbl > 4000.0) hbl = 4000.0
 
   ! Find the height level corresponding to the one immediately above the boundary layer height
   above_index = nk

@@ -188,7 +188,7 @@ PROGRAM bsnap
   USE split_particlesML, only: split_particles
   USE checkdomainML, only: check_in_domain
   USE rwalkML, only: rwalk_init, diffusion_scheme, blfullmix, eta_to_metres, metres_to_eta, turbulence_fields_required, &
-                     diffusion_in_metres, scheme_is_tke, diffusion_scheme_id, &
+                     diffusion_in_metres, scheme_is_tke, diffusion_scheme_id, reflecting_top, &
                      scheme_uses_adaptive_above_bl, bl_definition, bl_id, constant_bl_height, well_mixed_test, well_mixed_stable, &
                      integration_method, integration_id
   USE advance_particleML, only: advance_particle_position
@@ -414,7 +414,8 @@ PROGRAM bsnap
     diffusion_scheme_id = DIFF_VARIABLE_K
     diffusion_in_metres = .true.
     turbulence_fields_required = .true.
-
+    if (adaptive_timesteps) scheme_uses_adaptive_above_bl = .true.
+    
   case ('random_walk_flexpart')
     diffusion_scheme_id = DIFF_RANDOM_WALK_FLEX
     diffusion_in_metres = .true.
@@ -1307,6 +1308,12 @@ contains
       case ('langevin.switch.off')
         !..use standard drift correction term
         langevin_switch = .FALSE.
+      case ('reflecting.top.on')
+        !..switch for reflecting at top of bl
+        reflecting_top = .TRUE.
+      case ('reflecting.top.off')
+        !..switch for reflecting at top of bl
+        reflecting_top = .FALSE.
       case ('integration.method')
         if (.not. has_value) goto 12
         read(cinput(pname_start:pname_end),*) integration_method

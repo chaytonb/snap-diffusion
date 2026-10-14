@@ -32,6 +32,10 @@ module particleML
         real(real64)   :: turbvelw
         !> vertical gradient of sigw
         real(real64)   :: dsigwdz
+        !> vertical gradient of k (for rdm)
+        real(real64)   :: dkdz
+        !> local diffusivity (for rdm)
+        real(real64)   :: k
         !> Standard deviation of turbulent vertical velocity
         real         :: sigw
         !> Lagrangian timescale
