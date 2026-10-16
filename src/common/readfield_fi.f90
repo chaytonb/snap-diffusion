@@ -1201,9 +1201,9 @@ subroutine convert_hbl_to_vbl(hbl, vbl)
 
   ! Linearly interpolate between the two indices to get the exact hybrid level corresponding to the
   ! top of the boundary layer
-  do i = 1, nx
-    do j = 1, ny
-
+  do j = 1, ny
+    do i = 1, nx
+      
       pressure_below = vlevel(below_index(i,j))
       pressure_above = vlevel(above_index(i,j))
 

@@ -33,7 +33,7 @@ module rwalkML
   real(real64), parameter :: tmix_h = 15.0*60.0 ! Horizontal base-time time = 15 min (to reach ax^b width)
   real(real64), parameter :: lmax = 0.28 ! Maximum l-eta in the mixing layer
   real(real64), parameter :: labove = 0.03 ! Standard l-eta above the mixing layer
-  real(real64), parameter :: entrainment = 0.0 ! Entrainment zone = 10%*h
+  real(real64), parameter :: entrainment = 0.1 ! Entrainment zone = 10%*h
   real, parameter :: dt_min = 1.0 ! minimum timestep size for adaptive timestepping
 
   ! Values for random number generation
@@ -56,7 +56,7 @@ module rwalkML
   logical, save, public :: density_correction              = .FALSE.
   logical, save, public :: scheme_is_tke                   = .FALSE.
   logical, save, public :: scheme_uses_adaptive_above_bl   = .FALSE.
-  logical, save, public :: reflecting_top   = .FALSE.
+  logical, save, public :: reflecting_top   = .TRUE.
   integer, save, public :: diffusion_scheme_id = 0
   integer, save, public :: bl_id = 0
   integer, save, public :: integration_id = 0
@@ -122,7 +122,6 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
       call rdm_variable(part, pextra, dt_remaining, adaptive)
     endif
   elseif (diffusion_scheme_id == 3) then
-    
     if (integration_id == 1) then
       ! Standard Langevin formulation with Euler-Maruyama integration
       if (reflecting_top) then
@@ -238,11 +237,11 @@ subroutine rwalk(blfullmix,part,pextra)
 ! vertical diffusion
   if (part%z <= part%tbl) then ! Above boundary layer
 
-    if ((part%z + vrdbla*rnd(3)).gt.part%tbl) then ! reflect off BL top
-      part%z = 2 * part%tbl - (part%z + vrdbla*rnd(3))
-    else
-      part%z = part%z + vrdbla*rnd(3)
-    endif
+    ! if ((part%z + vrdbla*rnd(3)).gt.part%tbl) then ! reflect off BL top
+    !   part%z = 2 * part%tbl - (part%z + vrdbla*rnd(3))
+    ! else
+    !   part%z = part%z + vrdbla*rnd(3)
+    ! endif
     part%z = part%z + vrdbla*rnd(3)
 
   else ! In boundary layer
@@ -296,8 +295,9 @@ subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
   real, parameter :: sigw_min  = 0.1
   real, parameter :: eps_min   = 1.0e-5
   real, parameter :: tlu_min   = 20.0
-  real, parameter :: tlv_min   = 20.0
   real, parameter :: tlw_min   = 20.0
+  real, parameter :: ku_ft     = 18.75
+  real, parameter :: kz_ft     = 1.0
 
   real :: zeta
   real :: z_eff
@@ -311,7 +311,6 @@ subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
   real :: eps
   real :: depsdz
 
-  real :: tlw_raw
   real :: dtlw_dz
 
   ust = pextra%ust
@@ -355,7 +354,7 @@ subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
           - 2.535 * ust**2 / h * (1.0 - zeta)**0.5
 
      eps = (1.5 - 1.2 * zeta**(1.0 / 3.0)) * wst**3 / h &
-         + ust**3 / (kappa * z) * (1.0 - zeta)
+         + ust**3 / (kappa * z_eff) * (1.0 - zeta)
 
      depsdz = -0.4 * wst**3 * zeta**(-2.0 / 3.0) / h**2 &
             - ust**3 / (kappa * h**2 * zeta**2)
@@ -380,60 +379,49 @@ subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
 
   endif
 
-  ! Enforce minimum dissipation and vertical variance.
-  ! The derivative is zero where a minimum has been applied.
   if (eps < eps_min) then
      eps = eps_min
      depsdz = 0.0
   endif
 
-  ! Lagrangian timescales
+  ! Calculate Lagrangian timescales and the derivative
   tlu = 2.0 * sigu**2 / (c * eps)
   tlv = tlu
-  tlw_raw = 2.0 * sigw2 / (c * eps)
+  tlw = 2.0 * sigw2 / (c * eps)
+  dtlw_dz = tlw * (dsigw2dz / sigw2 - depsdz / eps)
 
-  ! Vertical timescale floor and derivative
-  if (tlw_raw < tlw_min) then
-     tlw     = tlw_min
-     dtlw_dz = 0.0
-  else
-     tlw = tlw_raw
-
-     dtlw_dz = tlw * &
-          (dsigw2dz / sigw2 - depsdz / eps)
-  endif
-
-  ! Horizontal timescale floors
-  tlu = max(tlu_min, tlu)
-  tlv = max(tlv_min, tlv)
-
+  ! Clip sigmaw
   if (sigw2 < sigw_min**2) then
      sigw2 = sigw_min**2
      dsigw2dz = 0.0
   endif
 
-  sigw = sqrt(sigw2)
-  dsigwdz = 0.5 * dsigw2dz / sigw
-
-  ! Horizontal velocity standard deviations
+  ! Clip horizontal sigmas
   sigu = max(sigu_min, sigu)
   sigv = sigu
+
+  ! Floor lagrangian timescales and derivative
+  tlu = max(tlu_min, tlu, ku_ft / sigu**2)
+  tlv = tlu
+  if (tlw < tlw_min) then
+     tlw = tlw_min
+     dtlw_dz = 0.0
+  endif
+  if (tlw < kz_ft / sigw2) then
+     tlw = kz_ft / sigw2
+     dtlw_dz = -kz_ft * dsigw2dz / sigw2**2  ! gives dK/dz = 0 by cancelling out
+  endif
+
+  ! Calculate final sigw values
+  sigw = sqrt(sigw2)
+  dsigwdz = 0.5 * dsigw2dz / sigw
 
   ! Diffusivities
   ku = sigu**2 * tlu
   kv = sigv**2 * tlv
   kz = sigw2 * tlw
-
-  if (kz <= 1.0) then 
-    kz = 1.0
-    dkdz = 0.0
-  else
-    dkdz = tlw * dsigw2dz + sigw2 * dtlw_dz
-  endif
-
-  ! Product rule:
-  ! dkz/dz = tlw * d(sigma_w^2)/dz
-  !        + sigma_w^2 * dtlw/dz
+  ! Product rule
+  dkdz = tlw * dsigw2dz + sigw2 * dtlw_dz
 
 end subroutine turb_profiles
 

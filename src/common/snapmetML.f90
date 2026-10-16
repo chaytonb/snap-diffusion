@@ -271,13 +271,12 @@ module snapmetML
       met_params%precconvrt = ''
       met_params%precstratiaccumv = ''
       met_params%precconaccumv = ''
-      met_params%hflux = 'sshf'
+      met_params%hflux = 'surface_upward_sensible_heat_flux_acc'
       met_params%hflux_is_accumulated = .true.
-      met_params%xflux = 'tisemf'
+      met_params%xflux = 'surface_eastward_momentum_flux_acc'
       met_params%xflux_is_accumulated = .true.
-      met_params%yflux = 'tisnmf'
+      met_params%yflux = 'surface_northward_momentum_flux_acc'
       met_params%yflux_is_accumulated = .true.
-      met_params%rel_humid = 'relative_humidity_2m'
       met_params%t2m = 'air_temperature_2m'
       met_params%spec_humid = 'specific_humidity_ml'
       met_params%tke = 'TKE_ml'
