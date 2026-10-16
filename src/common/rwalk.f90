@@ -116,7 +116,7 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
       if (part%zmetres.lt.part%hbl) then
         call rdm_variable(part, pextra, dt_remaining, adaptive)
       else
-        call rdm_variable_above_bl(part, pextra)
+        call rdm_variable_above_bl(part, pextra, dt_remaining, adaptive)
       endif
     else
       call rdm_variable(part, pextra, dt_remaining, adaptive)
@@ -467,7 +467,7 @@ subroutine langevin_thomson_em(part, pextra, dt_remaining, adaptive)
   part%dsigwdz = dsigwdz
 
   ! Based on turbulence parameters, calculate size of integration time step
-  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .false.)
 
   dttlu = part%ptstep/tlu
   dttlv = part%ptstep/tlv
@@ -536,7 +536,7 @@ subroutine langevin_thomson_em_above_bl(part, pextra, dt_remaining, adaptive)
   part%dsigwdz = dsigwdz
 
   ! Based on turbulence parameters, calculate size of integration time step
-  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .false.)
 
   dttlu = part%ptstep/tlu
   dttlv = part%ptstep/tlv
@@ -589,7 +589,7 @@ subroutine langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
   part%tlw = tlw
   part%sigw = sigw
 
-  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .false.)
 
   dttlu = part%ptstep / tlu
   dttlv = part%ptstep / tlv
@@ -670,7 +670,7 @@ subroutine langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
   part%sigw = sigw
   part%dsigwdz = dsigwdz
 
-  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .false.)
 
   dttlu = part%ptstep / tlu
   dttlv = part%ptstep / tlv
@@ -726,6 +726,8 @@ subroutine langevin_lr_above_bl(part, pextra, dt_remaining, adaptive)
   real, parameter :: kz_trop = 1.0
 
   real :: delz
+
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .false.)
 
   if (nrand+2.gt.max_rands) nrand=1
   part%turbvelu=rands(nrand)*sqrt(2.*ku_trop/part%ptstep)
@@ -806,7 +808,7 @@ subroutine rdm_variable(part, pextra, dt_remaining, adaptive)
 
 end subroutine rdm_variable
 
-subroutine rdm_variable_above_bl(part, pextra)
+subroutine rdm_variable_above_bl(part, pextra, dt_remaining, adaptive)
 
   USE particleML, only: extraParticle, Particle
 
@@ -815,10 +817,15 @@ subroutine rdm_variable_above_bl(part, pextra)
   !> extra information regarding the particle 
   type(extraParticle), intent(inout) :: pextra
 
+  real, intent(in) :: dt_remaining
+  logical, intent(in) :: adaptive
+
   ! turbulence factors for the troposphere
   real, parameter :: ku_trop = 18.75
   real, parameter :: kz_trop = 1.0
   real :: delz
+
+  call set_turbulence_timestep(part, dt_remaining, adaptive, .true.)
 
   if (nrand+2.gt.max_rands) nrand=1
   part%turbvelu=rands(nrand)*sqrt(2.*ku_trop/part%ptstep)
