@@ -295,49 +295,22 @@ subroutine bldp
 end subroutine bldp
 
 subroutine set_constant_bl(part)
+  use particleML, only: Particle
+  use rwalkML, only: constant_bl_height, metres_to_eta
+  implicit none
+  type(Particle), intent(inout) :: part
+  type(Particle) :: tmp
 
-  USE particleML, only: extraParticle, Particle
-  USE snapfldML, only: hlevel2, ps2
-  USE snapgrdML, only: alevel, blevel, vlevel
-  USE snapdimML, only: nk
-  USE rwalkML, only: constant_bl_height
-
-  type(Particle), intent(inout)  :: part
-
-  real :: z
-  real :: z1, z2
-  real :: p1, p2, px
-  real :: frac
-  integer :: i,j,k
-
-  ! find eta coordinate of 600 metres at particle location
   part%hbl = constant_bl_height
 
-  i = part%x
-  j = part%y
-  z = part%hbl
+  tmp = part
+  tmp%zmetres = constant_bl_height
+  call metres_to_eta(tmp)
+  part%tbl = tmp%z
 
-  do k = 2, nk-1
-    if (z < hlevel2(i,j,k+1)) exit
-  end do
-  k = max(1, min(k, nk-1))
-
-  z1 = hlevel2(i,j,k)
-  z2 = hlevel2(i,j,k+1)
-
-  p1 = alevel(k)*100 + blevel(k) * ps2(i,j) * 100.0
-  p2 = alevel(k+1)*100 + blevel(k+1) * ps2(i,j) * 100.0
-
-  if (p1 > 0.0 .and. p2 > 0.0) then
-    px = p1 * exp(log(p2/p1) * (z - z1) / (z2 - z1))
-    frac = (px - p1) / (p2 - p1)
-  else
-    frac = (z - z1) / (z2 - z1)
-  end if
-  frac = max(0.0, min(1.0, frac))
-
-  part%tbl = vlevel(k) * (1.0 - frac) + vlevel(k+1) * frac
-  
-end subroutine
+  tmp%zmetres = constant_bl_height * 1.5
+  call metres_to_eta(tmp)
+  part%domain_top = tmp%z
+end subroutine set_constant_bl
 
 end module bldpML

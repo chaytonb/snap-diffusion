@@ -48,6 +48,8 @@ module particleML
         integer      :: icbt=1
         !> sigma/eta at top of boundary layer
         real           :: tbl
+        !> top of domain in hybrid coords (only used for non-reflecting well mixed tests)
+        real           :: domain_top
         !> radioactive content (Bq)
         real, private  :: rad_
         !> height of boundary layer

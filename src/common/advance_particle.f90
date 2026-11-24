@@ -17,8 +17,6 @@ subroutine advance_particle_position(part, pextra, tnow, tstep, rt1, rt2, tf1, t
   real, intent(in)                   :: tnow, tstep, rt1, rt2, tf1, tf2 ! Time interpolation variables
   logical, intent(in)                :: adaptive
 
-  if (bl_id == 1) call set_constant_bl(part)
-
   if (adaptive) then
      call step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
   else
@@ -119,6 +117,7 @@ subroutine step_adaptive_loop(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
         ux = ux + part%ptstep * (pextra%u + part%turbvelu)
         vx = vx + part%ptstep * (pextra%v + part%turbvelv)
         part%zmetres = part%zmetres + pextra%w * part%ptstep
+        part%zmetres = max(part%zmetres, 0.0)
      endif
   endif
 
@@ -159,6 +158,7 @@ subroutine step_standard_single(part, pextra, tnow, tstep, rt1, rt2, tf1, tf2)
     part%y = part%y + (part%turbvelv + pextra%v) * part%ptstep * pextra%rmy
     ! Apply vertical advection
     part%zmetres = part%zmetres + pextra%w * part%ptstep
+    part%zmetres = max(part%zmetres, 1e-3)
   endif
 
 end subroutine step_standard_single

@@ -70,7 +70,7 @@ contains
     USE datetime, only: datetime_t, duration_t
     USE readfield_ncML, only: find_index, compute_vertical_coords
     USE rwalkML, only: bl_id, diffusion_fields, air_density, scheme_is_tke, &
-                       turbulence_fields_required, density_correction
+                       turbulence_fields_required, density_correction, well_mixed_test
     USE forwrdML, only: w_eta_to_m
     USE compheightML, only: compheight
 !> current timestep (always positive), negative istep means reset
@@ -99,6 +99,7 @@ contains
     integer :: i, j, k, ilevel, i1, i2
     integer :: nhdiff, nhdiff_precip, prev_tstep_same_file
     real :: alev(nk), blev(nk), dxgrid, dygrid
+    real, allocatable, save :: t_init(:,:,:)
     real, allocatable :: xflux(:, :), yflux(:, :)
     integer :: ifb, kfb
     real :: p, px, ptop
@@ -268,6 +269,16 @@ contains
 
 ! ps
     call fi_checkload(fio, met_params%psv, pressure_units, ps_io(:, :), nt=timepos, nr=nr)
+
+    ! Hold surface pressure and temperature constant for well mixed tests
+    if (well_mixed_test) then
+      ps_io = 1000.0
+      if (.not. allocated(t_init)) then
+        allocate(t_init, source=t_io)   ! first read: keep the raw temperature as read
+      else
+        t_io = t_init                   ! later reads: reuse it
+      end if
+    end if
 
 ! u10m
 ! v10m

@@ -190,7 +190,8 @@ PROGRAM bsnap
   USE rwalkML, only: rwalk_init, diffusion_scheme, blfullmix, eta_to_metres, metres_to_eta, turbulence_fields_required, &
                      diffusion_in_metres, scheme_is_tke, diffusion_scheme_id, reflecting_top, &
                      scheme_uses_adaptive_above_bl, bl_definition, bl_id, constant_bl_height, well_mixed_test, well_mixed_stable, &
-                     integration_method, integration_id
+                     integration_method, integration_id, write_bin_edges
+  USE bldpML, only: set_constant_bl
   USE advance_particleML, only: advance_particle_position
   USE milibML, only: xyconvert, GEO_PARAMS
   USE forwrdML, only: forwrd
@@ -270,7 +271,7 @@ PROGRAM bsnap
 
   ! For writing to txt file
   integer :: u
-  character(len=500) :: heights_file
+  character(len=500) :: heights_file, bin_edges_file
 
   ! Turbulence Scheme IDs
   integer, parameter :: DIFF_SNAP               = 1
@@ -287,6 +288,10 @@ PROGRAM bsnap
   integer :: ntprof
   type(duration_t) :: dur
   logical :: out_of_domain
+  logical :: first_step
+  real :: tbl_fixed, domain_top_fixed
+  logical, save :: profile_written = .false.
+  integer :: iu
   real ::lost_activity
   real, allocatable :: smoothing_kernel(:,:)
   integer :: last_age_hr = -1, age_hr = -1
@@ -883,6 +888,8 @@ PROGRAM bsnap
           lost_activity = 0.0
           if (.not.pdata(np)%is_active()) cycle part_do
 
+          first_step = (iplume(npl)%ageInSteps == 1)
+
           !..interpolation of boundary layer top, height, precipitation etc.
           !  creates and save temporary data to pextra%prc, pextra%rmx, pextra%rmy
           call posint(pdata(np), rt1, rt2, pextra)
@@ -902,27 +909,55 @@ PROGRAM bsnap
             adaptive_timesteps = .TRUE.
           endif
 
-          if (diffusion_in_metres) call eta_to_metres(pdata(np))
-          
+          ! heights and boundary layer before the step
+          if (well_mixed_test) then
+            if (diffusion_in_metres) then                       ! profile-based schemes
+              if (first_step) call eta_to_metres(pdata(np))     ! metres is the stored height after this
+              call set_constant_bl(pdata(np))
+            else                                                ! SNAP
+              if (first_step) then
+                call set_constant_bl(pdata(np))
+                tbl_fixed = pdata(np)%tbl
+                domain_top_fixed = pdata(np)%domain_top
+              end if
+              pdata(np)%hbl = constant_bl_height
+              pdata(np)%tbl = tbl_fixed
+              pdata(np)%domain_top = domain_top_fixed
+            end if
+          else                                                  ! normal runs
+            if (diffusion_in_metres) call eta_to_metres(pdata(np))
+            if (bl_id == 1) call set_constant_bl(pdata(np))
+          end if
+
           !..apply the advection and diffusion to particle
           call advance_particle_position(pdata(np), pextra, tnow, tstep, rt1, rt2, tf1, tf2, adaptive_timesteps)
 
-          ! Dump raw particle heights to txt file
+          ! well-mixed output, in metres for every scheme
           if (well_mixed_test) then
-            if (istep == 0) then
-              if (tnow == 0.0) write(u, *) pdata(np)%zmetres, 0
+            if (.not. diffusion_in_metres) then                 ! SNAP
+              call eta_to_metres(pdata(np))
+            end if
+            if (tnow == 0.0) write(u, *) pdata(np)%zmetres, merge(0, ihour, istep == 0)
+          end if
+
+          if (well_mixed_test .and. .not. profile_written) then
+            ! Store in same location as nc file
+            bin_edges_file = fldfil(:index(fldfil, '/', back=.true.)) // 'bin_edges.txt'
+            if (reflecting_top) then
+              call write_bin_edges(pdata(1), 20, bin_edges_file)
             else
-              if (tnow == 0.0) write(u, *) pdata(np)%zmetres, ihour
+              call write_bin_edges(pdata(1), 30, bin_edges_file)
             endif
-          endif
+            profile_written = .true.
+          end if
 
           call check_in_domain(pdata(np), out_of_domain)
           if (out_of_domain) then
             m = def_comp(pdata(np)%icomp)%to_output
             total_activity_lost_domain(m) = total_activity_lost_domain(m) + pdata(np)%get_set_rad(0.0)
+          else
+            if (diffusion_in_metres) call metres_to_eta(pdata(np))
           endif
-
-          if (diffusion_in_metres) call metres_to_eta(pdata(np))
 
           if (pdata(np)%is_active()) then
             if (pdata(np)%hbl > mhmax) mhmax = pdata(np)%hbl

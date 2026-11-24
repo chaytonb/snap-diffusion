@@ -64,7 +64,7 @@ snapfimexML.o: ../common/snapfimexML.f90
 	${F77} -c ${F77FLAGS} $<
 snapgrdML.o: ../common/snapgrdML.f90
 	${F77} -c $(F77FLAGS) $(INCLUDES) $<
-bldp.o: ../common/bldp.f90 snapdimML.o snaptabML.o snapgrdML.o snapfldML.o ftest.o snapdebugML.o snapgrdML.o
+bldp.o: ../common/bldp.f90 snapdimML.o snaptabML.o snapgrdML.o snapfldML.o ftest.o snapdebugML.o snapgrdML.o rwalk.o
 	${F77} -c ${F77FLAGS} $(INCLUDES) $<
 particleML.o: ../common/particleML.f90
 	${F77} -c ${F77FLAGS} $<

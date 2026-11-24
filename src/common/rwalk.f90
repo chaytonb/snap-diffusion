@@ -71,7 +71,7 @@ module rwalkML
   character(len=64), save, public :: integration_method = ''
 
   public rwalk_init, diffusion_fields, air_density, turbulence_master, eta_to_metres, &
-         metres_to_eta
+         metres_to_eta, write_bin_edges
 
   contains
 
@@ -113,7 +113,7 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
   if (diffusion_scheme_id == 5) then
     if (reflecting_top) then
       ! Check if particle within abl
-      if (part%zmetres.lt.part%hbl) then
+      if (part%zmetres.le.part%hbl) then
         call rdm_variable(part, pextra, dt_remaining, adaptive)
       else
         call rdm_variable_above_bl(part, pextra, dt_remaining, adaptive)
@@ -125,7 +125,7 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
     if (integration_id == 1) then
       ! Standard Langevin formulation with Euler-Maruyama integration
       if (reflecting_top) then
-        if (part%zmetres.lt.part%hbl) then
+        if (part%zmetres.le.part%hbl) then
           call langevin_thomson_em(part, pextra, dt_remaining, adaptive)
         else
           call langevin_thomson_em_above_bl(part, pextra, dt_remaining, adaptive)
@@ -136,7 +136,7 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
     else
       if (langevin_switch) then
         if (reflecting_top) then
-          if (part%zmetres.lt.part%hbl) then
+          if (part%zmetres.le.part%hbl) then
             ! Langevin equation with Legg and Raupach drift, and LEGGRAUP integration
             call langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
           else
@@ -148,7 +148,7 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
       else
         if (reflecting_top) then
           ! Standard Langevin formulation with LEGGRAUP integration
-          if (part%zmetres.lt.part%hbl) then
+          if (part%zmetres.le.part%hbl) then
             ! Langevin equation with Legg and Raupach drift, and LEGGRAUP integration
             call langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
           else
@@ -161,7 +161,7 @@ subroutine turbulence_master(part,pextra, dt_remaining, adaptive)
     endif
   elseif (diffusion_scheme_id == 4) then
     ! Check if particle within abl
-    if (part%zmetres.lt.part%hbl) then
+    if (part%zmetres.le.part%hbl) then
       call fixed_k_within_bl(part)
     else
       call fixed_k_above_bl(part)
@@ -242,12 +242,22 @@ subroutine rwalk(blfullmix,part,pextra)
     ! else
     !   part%z = part%z + vrdbla*rnd(3)
     ! endif
-    part%z = part%z + vrdbla*rnd(3)
+    if (well_mixed_test) then 
+      ! If well mixed test, reflect at 1.5h
+      if ((part%z + vrdbla*rnd(3)).lt.part%domain_top) then 
+        part%z = 2 * part%domain_top - (part%z + vrdbla*rnd(3))
+      else
+        part%z = part%z + vrdbla*rnd(3)
+      endif
+    else
+      part%z = part%z + vrdbla*rnd(3)
+    endif
 
   else ! In boundary layer
     bl_entrainment_thickness = (1.0 - part%tbl)*(1.+entrainment)
     if (blfullmix .or. (tsqrtfactor_v .gt. 1.0)) then ! full mixing
       part%z = 1.0 - bl_entrainment_thickness*(rnd(3)+0.5)
+
     else ! vertical mixing split in smaller time-steps   
       rv  = (1-part%tbl)*tsqrtfactor_v
 
@@ -256,21 +266,51 @@ subroutine rwalk(blfullmix,part,pextra)
       !... reflection from the ABL top
       !... but allow for entrainment
       ! top_entrainment 10% higher than tbl
-      top_entrainment = max(0., 1.0 - bl_entrainment_thickness)
-      if(part%z < top_entrainment) then
-        part%z = 2.0*part%tbl - part%z 
-      endif
+      if (.not.well_mixed_test) then
+        top_entrainment = max(0., 1.0 - bl_entrainment_thickness)
+        if(part%z < top_entrainment) then
+          part%z = 2.0*part%tbl - part%z 
+        endif
 
-    !... reflection from the bottom
-      if(part%z > 1.0) then
-        part%z = 2.0 - part%z
-      endif
+      !... reflection from the bottom
+        if(part%z > 1.0) then
+          part%z = 2.0 - part%z
+        endif
 
-    !..vertical limits
-      part%z = min(part%z, 1.0d0)
-      part%z = max(part%z, real(top_entrainment, kind=kind(part%z)))
+      !..vertical limits
+        part%z = min(part%z, 1.0d0)
+        part%z = max(part%z, real(top_entrainment, kind=kind(part%z)))
+      else
+        if (reflecting_top) then
+          ! Reflect from boundary layer top
+          top_entrainment = part%tbl
+          if(part%z < top_entrainment) then
+            part%z = 2.0*part%tbl - part%z 
+          endif
+
+        !... reflection from the bottom
+          if(part%z > 1.0) then
+            part%z = 2.0 - part%z
+          endif
+
+        !..vertical limits
+          part%z = min(part%z, 1.0d0)
+          part%z = max(part%z, real(top_entrainment, kind=kind(part%z)))
+        else ! Standard reflection logic, well mixed but reflection at 1.1h
+          top_entrainment = max(0., 1.0 - bl_entrainment_thickness)
+          if(part%z < top_entrainment) then
+            part%z = 2.0*part%tbl - part%z 
+          endif
+
+        !... reflection from the bottom
+          if(part%z > 1.0) then
+            part%z = 2.0 - part%z
+          endif
+        endif
+      endif
     end if
   end if
+
 end subroutine rwalk
 
 subroutine turb_profiles(sigu, sigv, sigw, tlu, tlv, tlw, &
@@ -437,7 +477,7 @@ subroutine langevin_thomson_em(part, pextra, dt_remaining, adaptive)
   logical, intent(in) :: adaptive
 
   real :: sigu, sigv, sigw
-  real ::  tlu, tlv, tlw
+  real :: tlu, tlv, tlw
   real :: ku, kv, kz, dkdz, dsigw2dz, dsigwdz
   real :: delz
   real :: dttlu, dttlv, dttlw
@@ -501,6 +541,12 @@ subroutine langevin_thomson_em(part, pextra, dt_remaining, adaptive)
     if (part%zmetres < 0.0) then ! reflection at ground
       part%zmetres = -part%zmetres
       part%turbvelw = -part%turbvelw
+    endif
+    if (well_mixed_test) then
+      if (part%zmetres > 1.5 * part%hbl) then
+        part%zmetres = 3.0 * part%hbl - part%zmetres
+        part%turbvelw = -part%turbvelw
+      endif
     endif
   endif
 
@@ -626,6 +672,12 @@ subroutine langevin_leggraup_lr(part, pextra, dt_remaining, adaptive)
       part%zmetres = -part%zmetres
       part%turbvelw = -part%turbvelw
     endif
+    if (well_mixed_test) then
+      if (part%zmetres > 1.5 * part%hbl) then
+        part%zmetres = 3.0 * part%hbl - part%zmetres
+        part%turbvelw = -part%turbvelw
+      endif
+    endif
   endif
 
 end subroutine langevin_leggraup_lr
@@ -706,6 +758,13 @@ subroutine langevin_thomson_lr(part, pextra, dt_remaining, adaptive)
     if (part%zmetres < 0.0) then ! reflection at ground
       part%zmetres = -part%zmetres
       part%turbvelw = -part%turbvelw
+    endif
+    if (well_mixed_test) then
+      ! Reflect off top boundary at 1.5xhbl for well mixed test
+      if (part%zmetres > 1.5 * part%hbl) then
+        part%zmetres = 3.0 * part%hbl - part%zmetres
+        part%turbvelw = -part%turbvelw
+      endif
     endif
   endif
 
@@ -803,6 +862,11 @@ subroutine rdm_variable(part, pextra, dt_remaining, adaptive)
   else
     if (part%zmetres < 0.0) then ! reflection at ground
       part%zmetres = -part%zmetres
+    endif
+    if (well_mixed_test) then
+      if (part%zmetres > 1.5 * part%hbl) then
+        part%zmetres = 3.0 * part%hbl - part%zmetres
+      endif
     endif
   endif
 
@@ -1138,8 +1202,11 @@ subroutine diffusion_fields
   ! surface kinematic heat flux = H0/(rho*cpa)
   fhsfc = hflux/(rho_a*cpa)
 
-  ! Calculate the obukhov length
-  obukhov_l_io = - (tv(:,:,2) * u_star_io**3)/(k*g*fhsfc)
+  where (abs(fhsfc) >= 1e-6)
+    obukhov_l_io = -(tv(:,:,2) * u_star_io**3) / (k * g * fhsfc)
+  elsewhere
+    obukhov_l_io = 10000
+  end where
 
   if (bl_id == 1) then
     hbl_io=constant_bl_height
@@ -1354,8 +1421,8 @@ subroutine set_turbulence_timestep(part, dt_remaining, adaptive, rdm)
   logical, intent(in) :: rdm
 
   if (adaptive) then
-      ! RDM time step restriction
     if (rdm) then
+      ! RDM time step restriction
       part%ptstep = (part%k/(2*part%dkdz)**2) * 0.10
     else
       ! Langevin time step restriction
@@ -1369,5 +1436,34 @@ subroutine set_turbulence_timestep(part, dt_remaining, adaptive, rdm)
      part%ptstep = dt_remaining
   end if
 end subroutine
+
+subroutine write_bin_edges(part_template, nbins, filename)
+  use particleML, only: Particle
+  type(Particle),   intent(in) :: part_template   ! any particle in the test column
+  integer,          intent(in) :: nbins
+  character(len=*), intent(in) :: filename        ! full path of the output file
+  type(Particle) :: dummy
+  real :: z_bot, z_top, z_edge
+  integer :: n, iu
+
+  dummy = part_template
+
+  dummy%z = 1.0;         call eta_to_metres(dummy);  z_bot = dummy%zmetres
+
+  if (reflecting_top) then
+    dummy%z = dummy%tbl;   call eta_to_metres(dummy);  z_top = dummy%zmetres
+  else
+    dummy%z = dummy%domain_top;   call eta_to_metres(dummy);  z_top = dummy%zmetres
+  endif
+
+  open(newunit=iu, file=trim(filename), status='replace', action='write')
+  do n = 0, nbins
+    z_edge = z_bot + (z_top - z_bot) * real(n) / real(nbins)
+    dummy%zmetres = z_edge
+    call metres_to_eta(dummy)
+    write(iu, '(I4,2(1X,ES16.8))') n, z_edge, dummy%z
+  end do
+  close(iu)
+end subroutine write_bin_edges
 
 end module rwalkML
