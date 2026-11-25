@@ -127,7 +127,7 @@ subroutine posint_vert(part, pextra, uprof, vprof, wprof, rhoprof, rhogradprof, 
   above_level = hlevel2(i, j, k+1)
 
   if (above_level /= below_level) then
-    frac = (particle_z - below_level) / (below_level)
+    frac = (particle_z - below_level) / (above_level - below_level)
   else
     frac = 0.0
   end if
